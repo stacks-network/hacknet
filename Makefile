@@ -105,6 +105,14 @@ genesis: check-not-running | build $(CHAINSTATE_DIR) /usr/bin/sudo
 # Secondary name to boot the genesis network
 up-genesis: genesis
 
+up-prom:
+	@echo "Starting $(PROJECT) prometheus monitoring"
+	docker compose -f docker/docker-compose.prom.yml --profile default -p $(PROJECT) up -d
+
+down-prom:
+	@echo "Shutting down $(PROJECT) prometheus monitoring"
+	docker compose -f docker/docker-compose.prom.yml --profile default -p $(PROJECT) down
+
 # Shut down the network (chainstate and logs will be preserved)
 down: backup-logs current-chainstate-dir
 	@echo "Shutting down $(PROJECT) network"
