@@ -55,7 +55,7 @@ x-common-vars:
   - &BITCOIN_MINER_IP 10.0.0.251
 
   # External Docker Images
-  - &IMAGE_STACKS_API hirosystems/stacks-blockchain-api:8.13.0@sha256:8352985823154b41d38abab07c95b5b469450760c902210b3280bf5e8170d5f3
+  - &IMAGE_STACKS_API hirosystems/stacks-blockchain-api:8.13.2@sha256:9c98b23c15150d9fd4b8b0284a2d33f93b74895491f4121712ddae8244238599
   - &IMAGE_POSTGRES postgres:16.6-bookworm@sha256:c965017e1d29eb03e18a11abc25f5e3cd78cb5ac799d495922264b8489d5a3a1
   - &IMAGE_BITCOIN bitcoin/bitcoin:25.2@sha256:14b4777166cba8de36b62ce72801038760a8f490122781b66d40592c8c69ebda
 
