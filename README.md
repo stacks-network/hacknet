@@ -58,6 +58,7 @@ make log stacks-signer-1 -- -f
 make log stacks-signer-1
 ```
 
+### Container management
 #### Pause/Unpause service
 To pause all services on the network
 ```sh
@@ -88,6 +89,19 @@ Restart the stopped service
 make start <service name>
 ```
 
+#### Force stop the hacknet network
+If the network is in a "stuck" state where the Makefile targets are not stopping the services (i.e. the `.current-chainstate-dir` file was removed while network was running), `down-force` may be used to force stop the network.
+
+```sh
+make down-force
+```
+
+Additionally, `clean` target will call `down-force` *and also* delete any chainstates on disk in `./docker/chainstate/*`
+```sh
+make clean
+```
+
+### Additional Features
 #### Stress the CPU
 To simulate CPU load. Can be modified with:
 - `STRESS_CORES` to target how many worker threads (default will use all cores)
@@ -97,6 +111,12 @@ make stress
 ```
 ```sh
 STRESS_CORES=10 STRESS_TIMEOUT=60 make stress
+```
+
+#### Monitor chain heights
+Run a script outputting the current chain heights of each miner
+```sh
+make monitor
 ```
 
 #### Create a chainstate snapshot
@@ -129,18 +149,16 @@ ex:
 CHAINSTATE_ARCHIVE=./docker/chainstate_new.tar.zstd make up
 ```
 
-#### Force stop the hacknet network
-If the network is in a "stuck" state where the Makefile targets are not stopping the services (i.e. the `.current-chainstate-dir` file was removed while network was running), `down-force` may be used to force stop the network.
-
+#### Prometheus sidecar
+##### Run prometheus and cadvisor
+Runs a prometheus container to record data collected by `cadvisor` for tracking host/container metrics
 ```sh
-make down-force
+make up-prom
 ```
-
-Additionally, `clean` target will call `down-force` *and also* delete any chainstates on disk in `./docker/chainstate/*`
+##### Stop prometheus and cadvisor
 ```sh
-make clean
+make down-prom
 ```
-
 
 ## Containers
 
