@@ -3,5 +3,6 @@
 rules: 
     services-alphabetical-order: 0
     service-image-require-explicit-tag: 0
+    require-quotes-in-ports: 0
 quiet: false
 debug: true

@@ -11,5 +11,5 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: docker-compose-linter/dclint-github-action@18659f6a7956706cb67cf9c1ad5e55f4352cbc17 # 1.6.0
         with:
-          path: ./docker/docker-compose.yml
+          path: ./docker/
           recursive: true
