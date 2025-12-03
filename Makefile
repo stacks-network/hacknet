@@ -1,9 +1,32 @@
-# List of binaries hacknet needs to function properly
-COMMANDS := sudo tar zstd getent stress
+# OS Detection and Cross-Platform Support
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+    OS := macos
+    export UID := $(shell id -u)
+    export GID := $(shell id -g)
+    # macOS: use sysctl for CPU count
+    STRESS_CORES ?= $(shell sysctl -n hw.ncpu)
+	# List of binaries hacknet needs to function properly
+    COMMANDS := sudo tar zstd stress
+    TAR_EXTRACT_FLAGS := -xf
+else
+    OS := linux
+    # Linux: use getent
+    export UID := $(shell getent passwd $$(whoami) | cut -d":" -f 3)
+    export GID := $(shell getent passwd $$(whoami) | cut -d":" -f 4)
+    # Linux: use /proc/cpuinfo for CPU count
+    STRESS_CORES ?= $(shell cat /proc/cpuinfo | grep processor | wc -l)
+	# List of binaries hacknet needs to function properly
+    COMMANDS := sudo tar zstd getent stress
+    TAR_EXTRACT_FLAGS := --same-owner -xf
+endif
+
+# Verify required dependencies exist
 $(foreach bin,$(COMMANDS),\
 	$(if $(shell command -v $(bin) 2> /dev/null),$(info),$(error Missing required dependency: `$(bin)`)))
 TARGET := $(firstword $(MAKECMDGOALS))
 PARAMS := $(filter-out $(TARGET),$(MAKECMDGOALS))
+
 # Hardcode the chainstate dir if we're booting from genesis
 ifeq ($(TARGET),up-genesis)
 	export CHAINSTATE_DIR := $(PWD)/docker/chainstate/genesis
@@ -12,9 +35,6 @@ ifeq ($(TARGET),genesis)
 	export CHAINSTATE_DIR := $(PWD)/docker/chainstate/genesis
 endif
 
-# UID and GID are not currently used, but may be later to ensure consistent file permissions
-export UID := $(shell getent passwd $$(whoami) | cut -d":" -f 3)
-export GID := $(shell getent passwd $$(whoami) | cut -d":" -f 4)
 EPOCH := $(shell date +%s)
 PWD = $(shell pwd)
 # Set a unique project name (used for checking if the network is running)
@@ -26,22 +46,21 @@ SERVICES := $(shell CHAINSTATE_DIR="" docker compose -f docker/docker-compose.ym
 # Pauses the bitcoin miner script. Default is set to nearly 1 trillion blocks
 PAUSE_HEIGHT ?= 999999999999
 # Used for the stress testing target. modifies how much cpu to consume for how long
-STRESS_CORES ?= $(shell cat /proc/cpuinfo | grep processor | wc -l)
 STRESS_TIMEOUT ?= 120
 
 # Create the chainstate dir and extract an archive to it when the "up" target is used
-$(CHAINSTATE_DIR): /usr/bin/tar /usr/bin/zstd
-	@if  [ ! -d "$(CHAINSTATE_DIR)" ]; then \
-		mkdir -p $(CHAINSTATE_DIR)
-		@if [ "$(TARGET)" = "up" ]; then
-			if [ -f "$(CHAINSTATE_ARCHIVE)" ]; then
-				sudo tar --same-owner -xf $(CHAINSTATE_ARCHIVE) -C $(CHAINSTATE_DIR) || exit 1
-			else
-				@echo "Chainstate archive ($(CHAINSTATE_ARCHIVE)) not found. Exiting"
-				rm -rf $(CHAINSTATE_DIR)
-				exit 1
-			fi
-		fi
+$(CHAINSTATE_DIR):
+	@if [ ! -d "$(CHAINSTATE_DIR)" ]; then \
+		mkdir -p $(CHAINSTATE_DIR); \
+		if [ "$(TARGET)" = "up" ]; then \
+			if [ -f "$(CHAINSTATE_ARCHIVE)" ]; then \
+				sudo tar $(TAR_EXTRACT_FLAGS) $(CHAINSTATE_ARCHIVE) -C $(CHAINSTATE_DIR) || exit 1; \
+			else \
+				echo "Chainstate archive ($(CHAINSTATE_ARCHIVE)) not found. Exiting"; \
+				rm -rf $(CHAINSTATE_DIR); \
+				exit 1; \
+			fi; \
+		fi; \
 	fi
 
 # Build the images with a cache if present
@@ -75,7 +94,7 @@ check-running:
 		exit 1; \
 	fi
 
-# For targets that need an arg, check that *something* is provided. it not, exit
+# For targets that need an arg, check that *something* is provided. if not, exit
 check-params: | check-running
 	@if [ ! "$(PARAMS)" ]; then \
 		echo "No service defined. Exiting"; \
@@ -85,15 +104,17 @@ check-params: | check-running
 # Boot the network from a local chainstate archive
 up: check-not-running | build $(CHAINSTATE_DIR)
 	@echo "Starting $(PROJECT) network from chainstate archive"
+	@echo "  OS: $(OS)"
 	@echo "  Chainstate Dir: $(CHAINSTATE_DIR)"
 	@echo "  Chainstate Archive: $(CHAINSTATE_ARCHIVE)"
 	echo "$(CHAINSTATE_DIR)" > .current-chainstate-dir
 	docker compose -f docker/docker-compose.yml --profile default -p $(PROJECT) up -d
 
 # Boot the network from genesis
-genesis: check-not-running | build $(CHAINSTATE_DIR) /usr/bin/sudo
+genesis: check-not-running | build $(CHAINSTATE_DIR)
 	@echo "Starting $(PROJECT) network from genesis"
-	@if  [ -d "$(CHAINSTATE_DIR)" ]; then \
+	@echo "  OS: $(OS)"
+	@if [ -d "$(CHAINSTATE_DIR)" ]; then \
 		echo "    Removing existing genesis chainstate dir: $(CHAINSTATE_DIR)"; \
 		sudo rm -rf $(CHAINSTATE_DIR); \
 	fi
@@ -118,7 +139,7 @@ down: backup-logs current-chainstate-dir
 	@echo "Shutting down $(PROJECT) network"
 	docker compose -f docker/docker-compose.yml --profile default -p $(PROJECT) down
 	@if [ -f .current-chainstate-dir ]; then \
-		rm -f .current-chainstate-dir
+		rm -f .current-chainstate-dir; \
 	fi
 
 # Secondary name to bring down the genesis network
@@ -129,7 +150,7 @@ down-force:
 	@echo "Force Shutting down $(PROJECT) network"
 	docker compose -f docker/docker-compose.yml --profile default -p $(PROJECT) down
 	@if [ -f .current-chainstate-dir ]; then \
-		rm -f .current-chainstate-dir
+		rm -f .current-chainstate-dir; \
 	fi
 
 # Stream specified service logs to STDOUT. Does not validate if PARAMS is supplied
@@ -142,15 +163,15 @@ log-all: current-chainstate-dir
 	docker compose -f docker/docker-compose.yml --profile default -p $(PROJECT) logs -t -f
 
 # Backup all service logs to $ACTIVE_CHAINSTATE_DIR/logs/<service-name>.log
-backup-logs: current-chainstate-dir /usr/bin/sudo
+backup-logs: current-chainstate-dir
 	@if [ -f .current-chainstate-dir ]; then \
-		$(eval ACTIVE_CHAINSTATE_DIR=$(shell cat .current-chainstate-dir))
-		if  [ ! -d "$(ACTIVE_CHAINSTATE_DIR)" ]; then \
-			echo "Chainstate Dir ($(ACTIVE_CHAINSTATE_DIR)) not found";\
+		$(eval ACTIVE_CHAINSTATE_DIR=$(shell cat .current-chainstate-dir)) \
+		if [ ! -d "$(ACTIVE_CHAINSTATE_DIR)" ]; then \
+			echo "Chainstate Dir ($(ACTIVE_CHAINSTATE_DIR)) not found"; \
 			exit 1; \
 		fi; \
-		if  [ ! -d "$(ACTIVE_CHAINSTATE_DIR)/logs" ]; then \
-			mkdir -p $(ACTIVE_CHAINSTATE_DIR)/logs;\
+		if [ ! -d "$(ACTIVE_CHAINSTATE_DIR)/logs" ]; then \
+			mkdir -p $(ACTIVE_CHAINSTATE_DIR)/logs; \
 		fi; \
 		echo "Backing up logs to $(ACTIVE_CHAINSTATE_DIR)/logs"; \
 		for service in $(SERVICES); do \
@@ -161,7 +182,7 @@ backup-logs: current-chainstate-dir /usr/bin/sudo
 # Replace the existing chainstate archive. Will be used with target `up`
 snapshot: current-chainstate-dir down
 	@echo "Creating $(PROJECT) chainstate snapshot from $(ACTIVE_CHAINSTATE_DIR)"
-	@if  [ -d "$(ACTIVE_CHAINSTATE_DIR)/logs" ]; then \
+	@if [ -d "$(ACTIVE_CHAINSTATE_DIR)/logs" ]; then \
 		rm -rf $(ACTIVE_CHAINSTATE_DIR)/logs; \
 	fi
 	@echo "Creating snapshot: $(CHAINSTATE_ARCHIVE)"
@@ -220,5 +241,5 @@ monitor:
 clean: down-force
 	sudo rm -rf ./docker/chainstate/*
 
-.PHONY: build build-no-cache current-chainstate-dir check-not-running check-running check-params up genesis up-genesis down down-genesis down-force log log-all backup-logs snapshot pause unpause stop start restart stress test monitor clean
+.PHONY: build build-no-cache current-chainstate-dir check-not-running check-running check-params up genesis up-genesis down down-genesis down-force log log-all backup-logs snapshot pause unpause stop start restart stress test monitor clean up-prom down-prom
 .ONESHELL: all-in-one-shell
