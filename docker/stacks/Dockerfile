@@ -1,14 +1,25 @@
 FROM rust:bookworm AS builder
 
 # This will be overridden by the value from docker-compose
+# Supports: branch name, tag, or commit SHA
+# Examples:
+#   STACKS_CORE_BASE_BRANCH=develop           (branch)
+#   STACKS_CORE_BASE_BRANCH=3.3.0.0.1         (tag)
+#   STACKS_CORE_BASE_BRANCH=abc123def456      (commit)
 ARG STACKS_CORE_BASE_BRANCH=master
 
-RUN echo "Building Stacks Core from branch: $STACKS_CORE_BASE_BRANCH"
+RUN echo "Building Stacks Core from: $STACKS_CORE_BASE_BRANCH"
 
-# Clone the specified branch from GitHub
-RUN git clone --branch $STACKS_CORE_BASE_BRANCH --single-branch --depth=1 https://github.com/stacks-network/stacks-core.git /code/stacks-core
+# Clone efficiently: shallow for branches/tags, targeted fetch for commits
+# This avoids downloading the full 2GB+ history
+RUN git init /code/stacks-core && \
+    cd /code/stacks-core && \
+    git remote add origin https://github.com/stacks-network/stacks-core.git && \
+    git fetch --depth=1 origin $STACKS_CORE_BASE_BRANCH && \
+    git checkout FETCH_HEAD
+
 WORKDIR /code/stacks-core
-RUN apt-get update && apt-get install -y git libclang-dev llvm
+RUN apt-get update && apt-get install -y libclang-dev llvm
 
 # Run an build that we'll cache the result of and then build the code
 RUN cargo build --features monitoring_prom,slog_json --bin stacks-node --bin stacks-signer
