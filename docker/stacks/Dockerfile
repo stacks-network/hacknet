@@ -11,7 +11,6 @@ ARG STACKS_CORE_BASE_BRANCH=master
 RUN echo "Building Stacks Core from: $STACKS_CORE_BASE_BRANCH"
 
 # Clone efficiently: shallow for branches/tags, targeted fetch for commits
-# This avoids downloading the full 2GB+ history
 RUN git init /code/stacks-core && \
     cd /code/stacks-core && \
     git remote add origin https://github.com/stacks-network/stacks-core.git && \
