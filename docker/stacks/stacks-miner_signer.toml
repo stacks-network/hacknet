@@ -110,6 +110,10 @@ epoch_name = "3.2"
 start_height = $STACKS_33_HEIGHT
 epoch_name = "3.3"
 
+[[burnchain.epochs]]
+start_height = $STACKS_34_HEIGHT
+epoch_name = "3.4"
+
 [[ustx_balance]]
 address = "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039" # Deployer Account
 amount = 10000000000000000
