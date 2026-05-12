@@ -8,7 +8,10 @@ ifeq ($(UNAME_S),Darwin)
     STRESS_CORES ?= $(shell sysctl -n hw.ncpu)
 	# List of binaries hacknet needs to function properly
     COMMANDS := sudo tar zstd stress
-    TAR_EXTRACT_FLAGS := -xf
+    # macOS Docker Desktop maps host UID into its VM; running BSD tar via sudo
+    # restores archive ownership and leaves bind-mount sources unwritable.
+    # Extract as the current user so everything lands user-owned.
+    TAR_EXTRACT := tar -xf
 else
     OS := linux
     # Linux: use getent
@@ -18,7 +21,7 @@ else
     STRESS_CORES ?= $(shell cat /proc/cpuinfo | grep processor | wc -l)
 	# List of binaries hacknet needs to function properly
     COMMANDS := sudo tar zstd getent stress
-    TAR_EXTRACT_FLAGS := --same-owner -xf
+    TAR_EXTRACT := sudo tar --same-owner -xf
 endif
 
 # Verify required dependencies exist
@@ -54,7 +57,7 @@ $(CHAINSTATE_DIR):
 		mkdir -p $(CHAINSTATE_DIR); \
 		if [ "$(TARGET)" = "up" ]; then \
 			if [ -f "$(CHAINSTATE_ARCHIVE)" ]; then \
-				sudo tar $(TAR_EXTRACT_FLAGS) $(CHAINSTATE_ARCHIVE) -C $(CHAINSTATE_DIR) || exit 1; \
+				$(TAR_EXTRACT) $(CHAINSTATE_ARCHIVE) -C $(CHAINSTATE_DIR) || exit 1; \
 			else \
 				echo "Chainstate archive ($(CHAINSTATE_ARCHIVE)) not found. Exiting"; \
 				rm -rf $(CHAINSTATE_DIR); \
