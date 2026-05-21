@@ -25,8 +25,7 @@ else
 endif
 
 # Verify required dependencies exist
-$(foreach bin,$(COMMANDS),\
-	$(if $(shell command -v $(bin) 2> /dev/null),$(info),$(error Missing required dependency: `$(bin)`)))
+$(foreach bin,$(COMMANDS),$(if $(shell command -v $(bin) 2> /dev/null),$(info),$(error Missing required dependency: `$(bin)`)))
 TARGET := $(firstword $(MAKECMDGOALS))
 PARAMS := $(filter-out $(TARGET),$(MAKECMDGOALS))
 
@@ -53,16 +52,10 @@ STRESS_TIMEOUT ?= 120
 
 # Create the chainstate dir and extract an archive to it when the "up" target is used
 $(CHAINSTATE_DIR):
-	@if [ ! -d "$(CHAINSTATE_DIR)" ]; then \
-		mkdir -p $(CHAINSTATE_DIR); \
+	@if [ ! -d "$(CHAINSTATE_DIR)" ]; then mkdir -p $(CHAINSTATE_DIR) && \
 		if [ "$(TARGET)" = "up" ]; then \
-			if [ -f "$(CHAINSTATE_ARCHIVE)" ]; then \
-				$(TAR_EXTRACT) $(CHAINSTATE_ARCHIVE) -C $(CHAINSTATE_DIR) || exit 1; \
-			else \
-				echo "Chainstate archive ($(CHAINSTATE_ARCHIVE)) not found. Exiting"; \
-				rm -rf $(CHAINSTATE_DIR); \
-				exit 1; \
-			fi; \
+			[ -f "$(CHAINSTATE_ARCHIVE)" ] && $(TAR_EXTRACT) $(CHAINSTATE_ARCHIVE) -C $(CHAINSTATE_DIR) || \
+			{ echo "Chainstate archive ($(CHAINSTATE_ARCHIVE)) not found. Exiting"; rm -rf $(CHAINSTATE_DIR); exit 1; }; \
 		fi; \
 	fi
 
@@ -92,17 +85,11 @@ check-not-running:
 
 # If the network is not running, we need to exit (ex: trying to restart a container)
 check-running:
-	@if test ! `docker compose ls --filter name=$(PROJECT) -q`; then \
-		echo "Network not running. exiting"; \
-		exit 1; \
-	fi
+	@test `docker compose ls --filter name=$(PROJECT) -q` || { echo "Network not running. exiting"; exit 1; }
 
 # For targets that need an arg, check that *something* is provided. if not, exit
 check-params: | check-running
-	@if [ ! "$(PARAMS)" ]; then \
-		echo "No service defined. Exiting"; \
-		exit 1; \
-	fi
+	@[ "$(PARAMS)" ] || { echo "No service defined. Exiting"; exit 1; }
 
 # Boot the network from a local chainstate archive
 up: check-not-running | build $(CHAINSTATE_DIR)
@@ -117,10 +104,7 @@ up: check-not-running | build $(CHAINSTATE_DIR)
 genesis: check-not-running | build $(CHAINSTATE_DIR)
 	@echo "Starting $(PROJECT) network from genesis"
 	@echo "  OS: $(OS)"
-	@if [ -d "$(CHAINSTATE_DIR)" ]; then \
-		echo "    Removing existing genesis chainstate dir: $(CHAINSTATE_DIR)"; \
-		sudo rm -rf $(CHAINSTATE_DIR); \
-	fi
+	@[ -d "$(CHAINSTATE_DIR)" ] && { echo "    Removing existing genesis chainstate dir: $(CHAINSTATE_DIR)"; sudo rm -rf $(CHAINSTATE_DIR); }
 	@echo "  Chainstate Dir: $(CHAINSTATE_DIR)"
 	mkdir -p "$(CHAINSTATE_DIR)"
 	echo "$(CHAINSTATE_DIR)" > .current-chainstate-dir
@@ -141,9 +125,7 @@ down-prom:
 down: backup-logs current-chainstate-dir
 	@echo "Shutting down $(PROJECT) network"
 	docker compose -f docker/docker-compose.yml --profile default -p $(PROJECT) down
-	@if [ -f .current-chainstate-dir ]; then \
-		rm -f .current-chainstate-dir; \
-	fi
+	@[ -f .current-chainstate-dir ] && rm -f .current-chainstate-dir
 
 # Secondary name to bring down the genesis network
 down-genesis: down
@@ -152,9 +134,7 @@ down-genesis: down
 down-force:
 	@echo "Force Shutting down $(PROJECT) network"
 	docker compose -f docker/docker-compose.yml --profile default -p $(PROJECT) down
-	@if [ -f .current-chainstate-dir ]; then \
-		rm -f .current-chainstate-dir; \
-	fi
+	@[ -f .current-chainstate-dir ] && rm -f .current-chainstate-dir
 
 # Stream specified service logs to STDOUT. Does not validate if PARAMS is supplied
 log: current-chainstate-dir
@@ -169,28 +149,18 @@ log-all: current-chainstate-dir
 backup-logs: current-chainstate-dir
 	@if [ -f .current-chainstate-dir ]; then \
 		$(eval ACTIVE_CHAINSTATE_DIR=$(shell cat .current-chainstate-dir)) \
-		if [ ! -d "$(ACTIVE_CHAINSTATE_DIR)" ]; then \
-			echo "Chainstate Dir ($(ACTIVE_CHAINSTATE_DIR)) not found"; \
-			exit 1; \
-		fi; \
-		if [ ! -d "$(ACTIVE_CHAINSTATE_DIR)/logs" ]; then \
-			mkdir -p $(ACTIVE_CHAINSTATE_DIR)/logs; \
-		fi; \
+		[ -d "$(ACTIVE_CHAINSTATE_DIR)" ] || { echo "Chainstate Dir ($(ACTIVE_CHAINSTATE_DIR)) not found"; exit 1; }; \
+		mkdir -p $(ACTIVE_CHAINSTATE_DIR)/logs; \
 		echo "Backing up logs to $(ACTIVE_CHAINSTATE_DIR)/logs"; \
-		for service in $(SERVICES); do \
-			docker logs -t $$service > $(ACTIVE_CHAINSTATE_DIR)/logs/$$service.log 2>&1; \
-		done; \
+		for service in $(SERVICES); do docker logs -t $$service > $(ACTIVE_CHAINSTATE_DIR)/logs/$$service.log 2>&1; done; \
 	fi
 
 # Replace the existing chainstate archive. Will be used with target `up`
 snapshot: current-chainstate-dir down
 	@echo "Creating $(PROJECT) chainstate snapshot from $(ACTIVE_CHAINSTATE_DIR)"
-	@if [ -d "$(ACTIVE_CHAINSTATE_DIR)/logs" ]; then \
-		rm -rf $(ACTIVE_CHAINSTATE_DIR)/logs; \
-	fi
+	@[ -d "$(ACTIVE_CHAINSTATE_DIR)/logs" ] && rm -rf $(ACTIVE_CHAINSTATE_DIR)/logs
 	@echo "Creating snapshot: $(CHAINSTATE_ARCHIVE)"
-	@echo "cd $(ACTIVE_CHAINSTATE_DIR); sudo tar --zstd -cf $(CHAINSTATE_ARCHIVE) *; cd $(PWD)"
-	cd $(ACTIVE_CHAINSTATE_DIR); sudo tar --zstd -cf $(CHAINSTATE_ARCHIVE) *; cd $(PWD)
+	(cd $(ACTIVE_CHAINSTATE_DIR) && sudo tar --zstd -cf $(CHAINSTATE_ARCHIVE) *)
 
 # Pause all services in the network (netork is down, but recoverably with target 'unpause')
 pause:
