@@ -3,7 +3,7 @@
 - bind-mounts a local filesystem for data persistence
 - Uses a chainstate archive to boot the network quickly
 - Configurable signing weight across the 3 signers
-- Designed to run Linux (tested on Debian-based) or MacOS
+- Designed to run on Linux (tested on Debian-based) or MacOS
 
 ## Quickstart
 
