@@ -1,4 +1,5 @@
-# Hacknet 
+# Hacknet
+
 - Configured for 3 stacks miners and signers
 - bind-mounts a local filesystem for data persistence
 - Uses a chainstate archive to boot the network quickly
@@ -8,155 +9,208 @@
 ## Quickstart
 
 ### Start network using a chainstate archive
-*Note*: default chainstate archive at `./docker/chainstate.tar.zstd` will be used unless overridden by `CHAINSTATE_ARCHIVE` env var.
+
+_Note_: default chainstate archive at `./docker/chainstate.tar.zstd` will be used unless overridden by `CHAINSTATE_ARCHIVE` env var.
 
 Creates a dynamic chainstate folder at `./docker/chainstate/$(date +%s)` from a chainstate archive
+
 ```sh
 make up
 ```
+
 To override the archive used to restore the network:
+
 ```sh
 CHAINSTATE_ARCHIVE=./docker/chainsate_new.tar.zstd make up
 ```
+
 To override the chainstate dir and resume a stopped network:
-*Note*: will not work for the `genesis` chainstate dir and absolute path is required
+_Note_: will not work for the `genesis` chainstate dir and absolute path is required
+
 ```sh
 CHAINSTATE_DIR=$(pwd)/docker/chainsate/<existing chainstate dir> make up
 ```
 
 ### Start network from genesis
+
 Creates a static chainstate folder at `./docker/chainstate/genesis`
+
 ```sh
 make genesis
 ```
 
 ### Stop the network
+
 ```sh
 make down
 ```
 
 ## Full list of options
+
 ### Logs
+
 `docker logs -f <service>` will work, along with some defined Makefile targets
 
 #### Store logs from all services under the current chainstate folder
+
 ```sh
 make backup-logs
 ```
 
 #### Stream logs from all services
+
 ```sh
 make log-all
 ```
+
 #### Stream single service logs
+
 ```sh
 make log stacks-signer-1 -- -f
 ```
 
 #### Log from a single service
-*note* this will not follow the logs
+
+_note_ this will not follow the logs
+
 ```sh
 make log stacks-signer-1
 ```
 
 ### Container management
+
 #### Pause/Unpause service
+
 To pause all services on the network
+
 ```sh
 make pause
 ```
+
 To resume the network
+
 ```sh
 make unpause
 ```
 
 #### Restart a service
+
 Used to simulate a node dropping off of the network
+
 ```sh
 make restart <container name> <number of seconds before restarting>
 ```
+
 ex:
+
 ```sh
 make restart stacks-miner-3 61
 ```
 
 #### Stop/Start service (kill)
+
 Stop a single service
+
 ```sh
 make stop <service name>
 ```
+
 Restart the stopped service
+
 ```sh
 make start <service name>
 ```
 
 #### Force stop the hacknet network
+
 If the network is in a "stuck" state where the Makefile targets are not stopping the services (i.e. the `.current-chainstate-dir` file was removed while network was running), `down-force` may be used to force stop the network.
 
 ```sh
 make down-force
 ```
 
-Additionally, `clean` target will call `down-force` *and also* delete any chainstates on disk in `./docker/chainstate/*`
+Additionally, `clean` target will call `down-force` _and also_ delete any chainstates on disk in `./docker/chainstate/*`
+
 ```sh
 make clean
 ```
 
 ### Additional Features
+
 #### Stress the CPU
+
 To simulate CPU load. Can be modified with:
+
 - `STRESS_CORES` to target how many worker threads (default will use all cores)
 - `STRESS_TIMEOUT` set a timeout (default of 120s)
+
 ```sh
 make stress
 ```
+
 ```sh
 STRESS_CORES=10 STRESS_TIMEOUT=60 make stress
 ```
 
 #### Monitor chain heights
+
 Run a script outputting the current chain heights of each miner
+
 ```sh
 make monitor
 ```
 
 #### Create a chainstate snapshot
+
 - Setting the env var `PAUSE_HEIGHT` is optional to pause the chain at a specific height, else a default of Bitcoin block `999999999999` is used.
 - Setting the env var `MINE_INTERVAL_EPOCH3` is recommended to reach the `PAUSE_HEIGHT` more quickly to create the snapshot
 - Optionally, the `CHAINSTATE_ARCHIVE` env var may be set to store the archive in a non-default location/name
-**This operation will work with either the `up` or `genesis` targets**
+  **This operation will work with either the `up` or `genesis` targets**
+
 ```sh
 make genesis
 ```
+
 or with env vars set:
+
 ```sh
 MINE_INTERVAL_EPOCH3=10 PAUSE_HEIGHT=240 make genesis
 ```
+
 Followed by waiting until the Bitcoin miner reaches the specified height (ex: `docker logs -f bitcoin-miner`)
 Once the Bitcoin miner has reached the specified height:
+
 ```sh
 make snapshot
 ```
+
 This will first bring down the network, then replace the existing `./docker/chainstate.tar.zstd` archive file used with the `up` Makefile target.
 
-To create the chainstate archive in a non-default location/name *File path must be absolute*:
+To create the chainstate archive in a non-default location/name _File path must be absolute_:
+
 ```sh
 CHAINSTATE_ARCHIVE=$(pwd)/docker/chainstate_new.tar.zstd make snapshot
 ```
 
 **Note**: `CHAINSTATE_ARCHIVE` must be defined to use with `make up` to use a non-default snapshot.
 ex:
+
 ```sh
 CHAINSTATE_ARCHIVE=./docker/chainstate_new.tar.zstd make up
 ```
 
 #### Prometheus sidecar
+
 ##### Run prometheus and cadvisor
+
 Runs a prometheus container to record data collected by `cadvisor` for tracking host/container metrics
+
 ```sh
 make up-prom
 ```
+
 ##### Stop prometheus and cadvisor
+
 ```sh
 make down-prom
 ```
@@ -177,7 +231,8 @@ make down-prom
 - **tx-broadcaster**: submits token transfer txs to ensure stacks block production during a sortition
 
 ## Bitcoin Miner
-*Dedicated address for Bitcoin block production after initial setup (~200 blocks). This prevents conflicts with Stacks mining operations.*
+
+_Dedicated address for Bitcoin block production after initial setup (~200 blocks). This prevents conflicts with Stacks mining operations._
 
 ```text
 ‣ Mnemonic:               foot script pledge suit bread thing stage long auction craft label injury helmet drum ice govern glass tag lamp shield bike raccoon cloud hat
@@ -308,13 +363,13 @@ make down-prom
 ‣ WIF:          cMz2ZSsaVgWPFUkE44zHpJepB4NdwB9L938h53hQfFoot81AZFb3
 ```
 
-
 ## Testing Accounts
-*Unused but funded accounts that may be used to deploy contracts or other txs*
+
+_Unused but funded accounts that may be used to deploy contracts or other txs_
 
 ### Deployer Account
 
-*Unused but funded account that may be used to deploy contracts or other txs*
+_Unused but funded account that may be used to deploy contracts or other txs_
 
 ```text
 ‣ Mnemonic:     keep can record bracket note hip face pudding castle detail few sunset review burger enhance foil lamp estate reopen butter then wasp pen kick
