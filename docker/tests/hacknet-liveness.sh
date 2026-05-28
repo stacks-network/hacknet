@@ -37,7 +37,7 @@ echo -e "| => (3) 🔬 TEST: [CHECK IF POSTGRES IS READY]  |"
 echo -e " -----------------------------------------------"
 PG_READY_SUCCESS=false
 PG_READY_SUCCESS_FRMT=$(echo -e "\033[1;31m$PG_READY_SUCCESS\033[0m❌")
-if (docker exec -it postgres pg_isready); then
+if (docker exec postgres pg_isready); then
     PG_READY_SUCCESS=true
     PG_READY_SUCCESS_FRMT=$(echo -e "\033[1;32m$PG_READY_SUCCESS\033[0m ✅")
 fi
