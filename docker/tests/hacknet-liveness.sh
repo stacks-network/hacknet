@@ -1,220 +1,89 @@
 #!/bin/bash
+# Hacknet liveness checks. One line per check.
+# Set DEBUG=1 to see raw responses/log excerpts on success too.
+set -uo pipefail
 
-echo -e " -----------------------------------------------"
-echo -e "| => (1) 🔬 TEST: [CHECK BITCOIN NODE IS LIVE]  |"
-echo -e " -----------------------------------------------"
+DEBUG="${DEBUG:-0}"
+FAILED=0
+TOTAL=0
 
-CHECK_BTC_LIVENESS_RESULT=$(curl -s -u "hacknet:hacknet" --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "getblockcount", "params": []}' -H 'content-type: text/plain;' "http://localhost:18443/" | jq)
+G='\033[1;32m'; R='\033[1;31m'; D='\033[0;90m'; N='\033[0m'
 
-echo -e "\nGET BLOCKCOUNT RPC:"
-echo -e $CHECK_BTC_LIVENESS_RESULT | jq
+# check NAME PASS_BOOL [CONTEXT]
+#   PASS_BOOL: "1"/"true" = pass, anything else = fail
+#   CONTEXT:   optional detail (printed on fail, or on pass when DEBUG=1)
+check() {
+    local name="$1" ok="$2" ctx="${3:-}"
+    TOTAL=$((TOTAL + 1))
+    if [ "$ok" = "1" ] || [ "$ok" = "true" ]; then
+        echo -e "${G}✓${N} $name"
+        [ "$DEBUG" = "1" ] && [ -n "$ctx" ] && echo -e "${D}  $ctx${N}"
+    else
+        FAILED=$((FAILED + 1))
+        echo -e "${R}✗${N} $name"
+        [ -n "$ctx" ] && echo -e "${D}  $ctx${N}" | head -20
+    fi
+}
 
-BTC_LIVENESS_SUCCESS=$(echo -e $CHECK_BTC_LIVENESS_RESULT | jq -r '.error == null')
-BTC_LIVENESS_SUCCESS_FRMT=$([ "$BTC_LIVENESS_SUCCESS" == "true" ] && echo -e "\033[1;32mtrue\033[0m ✅" || echo -e "\033[1;31mfalse\033[0m❌")
+# 1. Bitcoin RPC live
+btc_resp=$(curl -sf -u "hacknet:hacknet" --data-binary '{"jsonrpc":"1.0","method":"getblockcount","params":[]}' -H 'content-type: text/plain;' "http://localhost:18443/" 2>&1 || true)
+btc_height=$(echo "$btc_resp" | jq -r '.result // empty' 2>/dev/null)
+[ -n "$btc_height" ] && check "bitcoin RPC live (height=$btc_height)" 1 "$btc_resp" || check "bitcoin RPC live" 0 "$btc_resp"
 
+# 2. Bitcoin mineable
+mine_resp=$(curl -sf -u "hacknet:hacknet" --data-binary '{"jsonrpc":"1.0","method":"generatetoaddress","params":[1,"mqVnk6NPRdhntvfm4hh9vvjiRkFDUuSYsH"]}' -H 'content-type: text/plain;' "http://localhost:18443/" 2>&1 || true)
+echo "$mine_resp" | jq -e '.error == null' >/dev/null 2>&1
+check "bitcoin mineable" $? "$mine_resp"
 
-echo -e "\033[1mBTC_LIVENESS_SUCCESS\033[0m: $BTC_LIVENESS_SUCCESS_FRMT"
-echo -e "\n"
-########################################################################################
-echo -e " ------------------------------------------------------"
-echo -e "| => (2) 🔬 TEST: [CHECK IF BTC MINER IS ABLE TO MINE] |"
-echo -e " ------------------------------------------------------"
+# 3. Postgres ready
+pg_out=$(docker exec postgres pg_isready 2>&1 || true)
+echo "$pg_out" | grep -q "accepting connections"
+check "postgres ready" $? "$pg_out"
 
-echo -e "\nMINE 1 BLOCK RPC:"
-MINER_ADDRESS="mqVnk6NPRdhntvfm4hh9vvjiRkFDUuSYsH"
-CHECK_IF_BTC_MINEABLE_RESULT=$(curl -s -u "hacknet:hacknet" --data-binary '{"jsonrpc": "1.0", "id": "curltest", "method": "generatetoaddress", "params": [1, "'$MINER_ADDRESS'"]}' -H 'content-type: text/plain;' "http://localhost:18443/" | jq)
+# 4. Nakamoto signer spawned
+signer_logs=$(docker logs stacks-signer-1 2>/dev/null | grep -F "Signer spawned successfully" | tail -1)
+[ -n "$signer_logs" ]
+check "signer spawned" $? "(no 'Signer spawned successfully' in stacks-signer-1 logs)"
 
-echo -e $CHECK_IF_BTC_MINEABLE_RESULT | jq
+# 5–7. Stacks miners /v2/info
+for i in 1 2 3; do
+    port=$((19443 + i * 1000))
+    body=$(curl -sf -m 5 "http://localhost:${port}/v2/info" 2>&1 || true)
+    if [ -n "$body" ] && echo "$body" | jq -e '.stacks_tip_height' >/dev/null 2>&1; then
+        h=$(echo "$body" | jq -r '.stacks_tip_height')
+        check "stacks miner $i live (tip=$h)" 1 "$body"
+    else
+        check "stacks miner $i live" 0 "$body"
+    fi
+done
 
-BTC_MINEABLE_SUCCESS=$(echo -e $CHECK_IF_BTC_MINEABLE_RESULT | jq -r '.error == null')
-BTC_MINEABLE_SUCCESS_FRMT=$([ "$BTC_MINEABLE_SUCCESS" == "true" ] && echo -e "\033[1;32mtrue\033[0m ✅" || echo -e "\033[1;31mfalse\033[0m❌")
+# 8. Stacks tip > 0 (chain progressing past genesis)
+info=$(curl -sf -m 5 "http://localhost:20443/v2/info" 2>&1 || true)
+tip=$(echo "$info" | jq -r '.stacks_tip_height // 0' 2>/dev/null)
+[ "${tip:-0}" -gt 0 ] 2>/dev/null
+check "stacks tip > 0 (tip=$tip)" $? "$info"
 
-echo -e "\033[1mBTC_MINEABLE_SUCCESS\033[0m: $BTC_MINEABLE_SUCCESS_FRMT"
-echo -e "\n"
-########################################################################################
-echo -e " -----------------------------------------------"
-echo -e "| => (3) 🔬 TEST: [CHECK IF POSTGRES IS READY]  |"
-echo -e " -----------------------------------------------"
-PG_READY_SUCCESS=false
-PG_READY_SUCCESS_FRMT=$(echo -e "\033[1;31m$PG_READY_SUCCESS\033[0m❌")
-if (docker exec postgres pg_isready); then
-    PG_READY_SUCCESS=true
-    PG_READY_SUCCESS_FRMT=$(echo -e "\033[1;32m$PG_READY_SUCCESS\033[0m ✅")
-fi
+# 9. Stacks API event observer
+evt=$(curl -sf -m 5 "http://localhost:3700" 2>&1 || true)
+echo "$evt" | jq -e '.status == "ready"' >/dev/null 2>&1
+check "stacks-api event observer ready" $? "$evt"
 
-echo -e "\033[1mPG_READY_SUCCESS\033[0m: $PG_READY_SUCCESS_FRMT"
-echo -e "\n"
+# 10. Stacks public API
+api_code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://localhost:3999/extended/" || echo "000")
+[ "$api_code" = "200" ]
+check "stacks-api public endpoint (HTTP $api_code)" $? "expected 200, got $api_code"
 
-NAKAMOTO_SIGNER_DOCKER_LOGS=$(docker logs stacks-signer-1 2>/dev/null)
+# 11. Stacks-API connected to postgres
+api_pg=$(docker logs stacks-api 2>/dev/null | grep -F "PgNotifier connected" | tail -1)
+[ -n "$api_pg" ]
+check "stacks-api connected to postgres" $? "(no 'PgNotifier connected' in stacks-api logs)"
 
-NAKAMOTO_SIGNER_READY_SUCCESS=false
-NAKAMOTO_SIGNER_READY_SUCCESS_FRMT=$(echo -e "\033[1;31m$NAKAMOTO_SIGNER_READY_SUCCESS\033[0m❌")
-if [[ $NAKAMOTO_SIGNER_DOCKER_LOGS == *"Signer spawned successfully"* ]]; then
-    NAKAMOTO_SIGNER_READY_SUCCESS=true
-    echo -e "Nakamoto Signer || Signer spawned successfully"
-    NAKAMOTO_SIGNER_READY_SUCCESS_FRMT=$(echo -e "\033[1;32m$NAKAMOTO_SIGNER_READY_SUCCESS\033[0m ✅")
-fi
-
-echo -e "\033[1mNAKAMOTO_SIGNER_READY_SUCCESS\033[0m: $NAKAMOTO_SIGNER_READY_SUCCESS_FRMT"
-echo -e "\n"
-###############################################################################################################################
-echo -e " --------------------------------------------------"
-echo -e "| => (6) 🔬 TEST: [CHECK IF STACKS MINER 1 IS READY]  |"
-echo -e " --------------------------------------------------"
-STX_MINER_1_PORT=20443
-GET_STACKS_MINER_1_INFO_STATUS_CODE=$(curl --write-out %{http_code} --silent --output /dev/null "http://localhost:${STX_MINER_1_PORT}/v2/info")
-
-echo -e "\nGET STACKS MINER 1 STATUS: $GET_STACKS_MINER_1_INFO_STATUS_CODE"
-
-STACKS_MINER_1_LIVENESS_SUCCESS=false
-STACKS_MINER_1_LIVENESS_SUCCESS_FRMT=$(echo -e "\033[1;31m$STACKS_MINER_1_LIVENESS_SUCCESS\033[0m❌")
-
-if [[ $GET_STACKS_MINER_1_INFO_STATUS_CODE == "200" ]]; then
-    STACKS_MINER_1_LIVENESS_SUCCESS=true
-    STACKS_MINER_1_LIVENESS_SUCCESS_FRMT=$(echo -e "\033[1;32m$STACKS_MINER_1_LIVENESS_SUCCESS\033[0m ✅")
-fi
-
-
-echo -e "\033[1mSTACKS_MINER_1_LIVENESS_SUCCESS\033[0m: $STACKS_MINER_1_LIVENESS_SUCCESS_FRMT"
-echo -e "\n"
-###############################################################################################################################
-echo -e " --------------------------------------------------"
-echo -e "| => (6) 🔬 TEST: [CHECK IF STACKS MINER 2 IS READY]  |"
-echo -e " --------------------------------------------------"
-STX_MINER_2_PORT=21443
-GET_STACKS_MINER_2_INFO_STATUS_CODE=$(curl --write-out %{http_code} --silent --output /dev/null "http://localhost:${STX_MINER_2_PORT}/v2/info")
-
-echo -e "\nGET STACKS MINER 2 STATUS: $GET_STACKS_MINER_2_INFO_STATUS_CODE"
-
-STACKS_MINER_2_LIVENESS_SUCCESS=false
-STACKS_MINER_2_LIVENESS_SUCCESS_FRMT=$(echo -e "\033[1;31m$STACKS_MINER_2_LIVENESS_SUCCESS\033[0m❌")
-
-if [[ $GET_STACKS_MINER_2_INFO_STATUS_CODE == "200" ]]; then
-    STACKS_MINER_2_LIVENESS_SUCCESS=true
-    STACKS_MINER_2_LIVENESS_SUCCESS_FRMT=$(echo -e "\033[1;32m$STACKS_MINER_2_LIVENESS_SUCCESS\033[0m ✅")
-fi
-
-
-echo -e "\033[1mSTACKS_MINER_2_LIVENESS_SUCCESS\033[0m: $STACKS_MINER_2_LIVENESS_SUCCESS_FRMT"
-echo -e "\n"
-###############################################################################################################################
-echo -e " --------------------------------------------------"
-echo -e "| => (6) 🔬 TEST: [CHECK IF STACKS MINER 3 IS READY]  |"
-echo -e " --------------------------------------------------"
-STX_MINER_3_PORT=22443
-GET_STACKS_MINER_3_INFO_STATUS_CODE=$(curl --write-out %{http_code} --silent --output /dev/null "http://localhost:${STX_MINER_3_PORT}/v2/info")
-
-echo -e "\nGET STACKS MINER 3 STATUS: $GET_STACKS_MINER_3_INFO_STATUS_CODE"
-
-STACKS_MINER_3_LIVENESS_SUCCESS=false
-STACKS_MINER_3_LIVENESS_SUCCESS_FRMT=$(echo -e "\033[1;31m$STACKS_MINER_3_LIVENESS_SUCCESS\033[0m❌")
-
-if [[ $GET_STACKS_MINER_3_INFO_STATUS_CODE == "200" ]]; then
-    STACKS_MINER_3_LIVENESS_SUCCESS=true
-    STACKS_MINER_3_LIVENESS_SUCCESS_FRMT=$(echo -e "\033[1;32m$STACKS_MINER_3_LIVENESS_SUCCESS\033[0m ✅")
-fi
-
-
-echo -e "\033[1mSTACKS_MINER_3_LIVENESS_SUCCESS\033[0m: $STACKS_MINER_3_LIVENESS_SUCCESS_FRMT"
-echo -e "\n"
-###############################################################################################################################
-echo -e " ---------------------------------------------------------------"
-echo -e "| => (7) 🔬 TEST: [CHECK IF STX NODE IS SYNCED WITH BTC UTXOs]  |"
-echo -e " ---------------------------------------------------------------"
-
-## (RPC APPROACH)
-GET_STACKS_NODE_INFO=$(curl -s "http://localhost:20443/v2/info")
-
-echo -e "\nGET STACKS NODE INFO:"
-echo -e $GET_STACKS_NODE_INFO | jq 'del(.stackerdbs)'
-echo -e "\t\t.\n\t\t.\n  \033[1;32m<<\033[0m \033[1;35mLong Output Supressed\033[0m \033[1;32m>>\033[0m \n\t\t.\n\t\t."
-
-STX_SYNC_WITH_BTC_UTXO_SUCCESS=$(echo -e $GET_STACKS_NODE_INFO | jq -r '.stacks_tip_height != 0')
-STX_SYNC_WITH_BTC_UTXO_SUCCESS_FRMT=$([ "$STX_SYNC_WITH_BTC_UTXO_SUCCESS" == "true" ] && echo -e "\033[1;32mtrue\033[0m ✅" || echo -e "\033[1;31mfalse\033[0m❌")
-
-echo -e "\033[1mSTX_SYNC_WITH_BTC_UTXO_SUCCESS\033[0m: $STX_SYNC_WITH_BTC_UTXO_SUCCESS_FRMT"
-echo -e "\n"
-###############################################################################################################################
-echo -e " ---------------------------------------------------------------"
-echo -e "| => (8) 🔬 TEST: [CHECK STACKS API EVENT OBSERVER LIVENESS]  |"
-echo -e " ---------------------------------------------------------------"
-
-GET_STACKS_API_EVENT_OBSERVER_PING=$(curl -s "http://localhost:3700")
-
-echo -e "\nGET STACKS API EVENT OBSERVER PING:"
-echo -e $GET_STACKS_API_EVENT_OBSERVER_PING | jq
-
-STACKS_API_EVENT_OBSERVER_LIVENESS_SUCCESS=$(echo -e $GET_STACKS_API_EVENT_OBSERVER_PING | jq -r '.status == "ready"')
-STACKS_API_EVENT_OBSERVER_LIVENESS_SUCCESS_FRMT=$([ "$STACKS_API_EVENT_OBSERVER_LIVENESS_SUCCESS" == "true" ] && echo -e "\033[1;32mtrue\033[0m ✅" || echo -e "\033[1;31mfalse\033[0m❌")
-
-echo -e "\033[1mSTACKS_API_EVENT_OBSERVER_LIVENESS_SUCCESS\033[0m: $STACKS_API_EVENT_OBSERVER_LIVENESS_SUCCESS_FRMT"
-echo -e "\n"
-###############################################################################################################################
-echo -e " ---------------------------------------------------------------"
-echo -e "| => (9) 🔬 TEST: [CHECK STACKS PUBLIC API LIVENESS]  |"
-echo -e " ---------------------------------------------------------------"
-
-GET_STACKS_PUBLIC_API_PING=$(curl -s --write-out %{http_code} --silent --output /dev/null  "http://localhost:3999/extended/")
-
-echo -e "\nGET STACKS PUBLIC API PING:"
-echo -e $GET_STACKS_PUBLIC_API_PING | jq
-
-STACKS_PUBLIC_API_LIVENESS_SUCCESS=false
-STACKS_PUBLIC_API_LIVENESS_SUCCESS_FRMT=$(echo -e "\033[1;31mfalse\033[0m❌")
-
-if [[ $GET_STACKS_PUBLIC_API_PING == "200" ]]; then
-    STACKS_PUBLIC_API_LIVENESS_SUCCESS=true
-    STACKS_PUBLIC_API_LIVENESS_SUCCESS_FRMT=$(echo -e "\033[1;32m$STACKS_PUBLIC_API_LIVENESS_SUCCESS\033[0m ✅")
-fi
-
-echo -e "\033[1mSTACKS_PUBLIC_API_LIVENESS_SUCCESS\033[0m: $STACKS_PUBLIC_API_LIVENESS_SUCCESS_FRMT"
-echo -e "\n"
-###############################################################################################################################
-echo -e " -----------------------------------------------------------------"
-echo -e "| => (10) 🔬 TEST: [CHECK IF STACKS-API IS CONNECTED TO POSTGRES]  |"
-echo -e " -----------------------------------------------------------------"
-
-STACKS_API_DOCKER_LOGS=$(docker logs stacks-api 2>/dev/null)
-
-STACKS_API_CONNECTED_TO_PG_SUCCESS=false
-STACKS_API_CONNECTED_TO_PG_SUCCESS_FRMT=$(echo -e "\033[1;31m$STACKS_API_CONNECTED_TO_PG_SUCCESS\033[0m❌")
-if [[ $STACKS_API_DOCKER_LOGS == *"PgNotifier connected"* ]]; then
-    STACKS_API_CONNECTED_TO_PG_SUCCESS=true
-    echo -e "Stacks-API || PgNotifier connected"
-    STACKS_API_CONNECTED_TO_PG_SUCCESS_FRMT=$(echo -e "\033[1;32m$STACKS_API_CONNECTED_TO_PG_SUCCESS\033[0m ✅")
-fi
-
-echo -e "\033[1mSTACKS_API_CONNECTED_TO_PG_SUCCESS\033[0m: $STACKS_API_CONNECTED_TO_PG_SUCCESS_FRMT"
-echo -e "\n"
-###############################################################################################################################
-echo -e "-----------------------------------------------------------------"
-echo -e "|                        SUMMARY                                 |"
-echo -e "-----------------------------------------------------------------"
-echo -e "| \033[1mBTC_LIVENESS_SUCCESS\033[0m:                         | \t $BTC_LIVENESS_SUCCESS_FRMT |"
-echo -e "| \033[1mBTC_MINEABLE_SUCCESS\033[0m:                         | \t $BTC_MINEABLE_SUCCESS_FRMT |"
-echo -e "| \033[1mPG_READY_SUCCESS\033[0m:                             | \t $PG_READY_SUCCESS_FRMT |"
-echo -e "| \033[1mNAKAMOTO_SIGNER_READY_SUCCESS\033[0m:                | \t $NAKAMOTO_SIGNER_READY_SUCCESS_FRMT |"
-echo -e "| \033[1mSTACKS_MINER_1_LIVENESS_SUCCESS\033[0m:              | \t $STACKS_MINER_1_LIVENESS_SUCCESS_FRMT |"
-echo -e "| \033[1mSTACKS_MINER_2_LIVENESS_SUCCESS\033[0m:              | \t $STACKS_MINER_2_LIVENESS_SUCCESS_FRMT |"
-echo -e "| \033[1mSTACKS_MINER_3_LIVENESS_SUCCESS\033[0m:              | \t $STACKS_MINER_3_LIVENESS_SUCCESS_FRMT |"
-echo -e "| \033[1mSTX_SYNC_WITH_BTC_UTXO_SUCCESS\033[0m:               | \t $STX_SYNC_WITH_BTC_UTXO_SUCCESS_FRMT |"
-echo -e "| \033[1mSTACKS_API_EVENT_OBSERVER_LIVENESS_SUCCESS\033[0m:   | \t $STACKS_API_EVENT_OBSERVER_LIVENESS_SUCCESS_FRMT |"
-echo -e "| \033[1mSTACKS_PUBLIC_API_LIVENESS_SUCCESS\033[0m:           | \t $STACKS_PUBLIC_API_LIVENESS_SUCCESS_FRMT |"
-echo -e "| \033[1mSTACKS_API_CONNECTED_TO_PG_SUCCESS\033[0m:           | \t $STACKS_API_CONNECTED_TO_PG_SUCCESS_FRMT |"
-echo -e "-----------------------------------------------------------------"
-
-if [[ $BTC_LIVENESS_SUCCESS == true \
-    && $BTC_MINEABLE_SUCCESS == true \
-    && $PG_READY_SUCCESS == true \
-    && $NAKAMOTO_SIGNER_READY_SUCCESS == true \
-    && $STACKS_MINER_1_LIVENESS_SUCCESS == true \
-    && $STACKS_MINER_2_LIVENESS_SUCCESS == true \
-    && $STACKS_MINER_3_LIVENESS_SUCCESS == true \
-    && $STX_SYNC_WITH_BTC_UTXO_SUCCESS == true \
-    && $STACKS_API_EVENT_OBSERVER_LIVENESS_SUCCESS == true \
-    && $STACKS_PUBLIC_API_LIVENESS_SUCCESS == true \
-    && $STACKS_API_CONNECTED_TO_PG_SUCCESS == true ]]; then
+# Summary
+echo
+if [ $FAILED -eq 0 ]; then
+    echo -e "${G}all $TOTAL checks passed${N}"
     exit 0
+else
+    echo -e "${R}$FAILED/$TOTAL checks failed${N}"
+    exit 1
 fi
-
-exit 1
