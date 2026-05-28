@@ -1,7 +1,7 @@
 FROM rust:bookworm AS builder
 
 # This will be overridden by the value from docker-compose
-# Supports: branch name, tag, or commit SHA
+# Supports any git ref
 # Examples:
 #   STACKS_CORE_BASE_BRANCH=develop           (branch)
 #   STACKS_CORE_BASE_BRANCH=3.3.0.0.1         (tag)
