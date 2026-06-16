@@ -7,7 +7,7 @@ ifeq ($(UNAME_S),Darwin)
     # macOS: use sysctl for CPU count
     STRESS_CORES ?= $(shell sysctl -n hw.ncpu)
 	# List of binaries hacknet needs to function properly
-    COMMANDS := sudo tar zstd stress
+    COMMANDS := sudo tar zstd jq stress
     # macOS Docker Desktop maps host UID into its VM; running BSD tar via sudo
     # restores archive ownership and leaves bind-mount sources unwritable.
     # Extract as the current user so everything lands user-owned.
@@ -21,7 +21,7 @@ else
     # Linux: use /proc/cpuinfo for CPU count
     STRESS_CORES ?= $(shell cat /proc/cpuinfo | grep processor | wc -l)
     # List of binaries hacknet needs to function properly
-    COMMANDS := sudo tar zstd getent stress
+    COMMANDS := sudo tar zstd getent jq stress
     TAR_EXTRACT := sudo tar --same-owner -xf
     TAR_CREATE := sudo tar --zstd -cf
 endif

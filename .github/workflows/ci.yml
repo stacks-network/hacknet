@@ -20,7 +20,7 @@ jobs:
 
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
-        run: brew install zstd stress
+        run: brew install zstd jq stress
 
       - name: Verify Makefile parses and dependency check passes
         run: make -n up
