@@ -1,16 +1,12 @@
 FROM rust:bookworm AS builder
 
 # This will be overridden by the value from docker-compose
-# Supports any git ref
-# Examples:
-#   STACKS_CORE_BASE_BRANCH=develop           (branch)
-#   STACKS_CORE_BASE_BRANCH=3.3.0.0.1         (tag)
-#   STACKS_CORE_BASE_BRANCH=abc123def456      (commit)
+# Accepts a branch, tag, or full commit SHA reachable in
+# stacks-network/stacks-core.
 ARG STACKS_CORE_BASE_BRANCH=master
 
 RUN echo "Building Stacks Core from: $STACKS_CORE_BASE_BRANCH"
 
-# Clone efficiently: shallow for branches/tags, targeted fetch for commits
 RUN git init /code/stacks-core && \
     cd /code/stacks-core && \
     git remote add origin https://github.com/stacks-network/stacks-core.git && \
