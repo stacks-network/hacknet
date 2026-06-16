@@ -12,6 +12,7 @@ ifeq ($(UNAME_S),Darwin)
     # restores archive ownership and leaves bind-mount sources unwritable.
     # Extract as the current user so everything lands user-owned.
     TAR_EXTRACT := tar -xf
+    TAR_CREATE := tar --zstd -cf
 else
     OS := linux
     # Linux: use getent
@@ -19,9 +20,10 @@ else
     export GID := $(shell getent passwd $$(whoami) | cut -d":" -f 4)
     # Linux: use /proc/cpuinfo for CPU count
     STRESS_CORES ?= $(shell cat /proc/cpuinfo | grep processor | wc -l)
-	# List of binaries hacknet needs to function properly
+    # List of binaries hacknet needs to function properly
     COMMANDS := sudo tar zstd getent stress
     TAR_EXTRACT := sudo tar --same-owner -xf
+    TAR_CREATE := sudo tar --zstd -cf
 endif
 
 # Verify required dependencies exist
@@ -160,7 +162,7 @@ snapshot: current-chainstate-dir down
 	@echo "Creating $(PROJECT) chainstate snapshot from $(ACTIVE_CHAINSTATE_DIR)"
 	@[ -d "$(ACTIVE_CHAINSTATE_DIR)/logs" ] && rm -rf $(ACTIVE_CHAINSTATE_DIR)/logs
 	@echo "Creating snapshot: $(CHAINSTATE_ARCHIVE)"
-	(cd $(ACTIVE_CHAINSTATE_DIR) && sudo tar --zstd -cf $(CHAINSTATE_ARCHIVE) *)
+	(cd $(ACTIVE_CHAINSTATE_DIR) && $(TAR_CREATE) $(CHAINSTATE_ARCHIVE) *)
 
 # Pause all services in the network (netork is down, but recoverably with target 'unpause')
 pause:
