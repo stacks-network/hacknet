@@ -25,8 +25,15 @@ jobs:
       - name: Verify Makefile parses and dependency check passes
         run: make -n up
 
-  # Linux-only: macOS runners lack Docker. The Darwin Makefile branch is
-  # already covered by dry-run; the live stack itself is OS-independent.
+      - name: Smoke-test chainstate extraction (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p "$RUNNER_TEMP/hacknet-chainstate"
+          tar -xf docker/chainstate.tar.zstd -C "$RUNNER_TEMP/hacknet-chainstate"
+          test -d "$RUNNER_TEMP/hacknet-chainstate/bitcoin"
+
+  # Linux-only: macOS runners lack Docker. The Darwin Makefile branch and
+  # archive extraction are covered by dry-run.
   live-run:
     needs: dry-run
     runs-on: ubuntu-latest
