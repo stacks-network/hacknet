@@ -125,7 +125,7 @@ down-prom:
 down: backup-logs current-chainstate-dir
 	@echo "Shutting down $(PROJECT) network"
 	docker compose -f docker/docker-compose.yml --profile default -p $(PROJECT) down
-	@[ -f .current-chainstate-dir ] && rm -f .current-chainstate-dir
+	@rm -f .current-chainstate-dir
 
 # Secondary name to bring down the genesis network
 down-genesis: down
@@ -134,7 +134,7 @@ down-genesis: down
 down-force:
 	@echo "Force Shutting down $(PROJECT) network"
 	docker compose -f docker/docker-compose.yml --profile default -p $(PROJECT) down
-	@[ -f .current-chainstate-dir ] && rm -f .current-chainstate-dir
+	@rm -f .current-chainstate-dir
 
 # Stream specified service logs to STDOUT. Does not validate if PARAMS is supplied
 log: current-chainstate-dir
