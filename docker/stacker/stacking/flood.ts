@@ -20,7 +20,7 @@ if (process.argv.slice(2).length > 0) {
   config({ path: './tx-broadcaster.env' });
 }
 import { bytesToHex } from '@stacks/common';
-import { logger, parseEnvInt, contractsApi, accountsApi } from './common';
+import { accountsApi, contractsApi, isNodeNotReadyError, logger, parseEnvInt } from './common';
 
 const broadcastInterval = parseInt(process.env.NAKAMOTO_BLOCK_INTERVAL ?? '2');
 const url = `http://${process.env.STACKS_CORE_RPC_HOST}:${process.env.STACKS_CORE_RPC_PORT}`;
@@ -183,7 +183,7 @@ async function waitForNakamoto() {
         break;
       }
     } catch (error) {
-      if (/(ECONNREFUSED|ENOTFOUND|SyntaxError)/.test(error.cause?.message)) {
+      if (isNodeNotReadyError(error)) {
         logger.info(`Stacks node not ready, waiting...`);
       } else {
         logger.error('Error getting pox info:', error);

@@ -93,11 +93,27 @@ export const getAccounts = (stackingKeys: string[], stackingSlotDistribution: nu
 export const MAX_U128 = 2n ** 128n - 1n;
 export const maxAmount = MAX_U128;
 
+export function isNodeNotReadyError(error: unknown) {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const cause = error.cause;
+  if (
+    typeof cause !== 'object' ||
+    cause === null ||
+    !('message' in cause) ||
+    typeof cause.message !== 'string'
+  ) {
+    return false;
+  }
+  return /(ECONNREFUSED|ENOTFOUND|SyntaxError)/.test(cause.message);
+}
+
 export async function waitForSetup(stackingKeys: string[], stackingSlotDistribution: number[]) {
   try {
     await getAccounts(stackingKeys, stackingSlotDistribution)[0].client.getPoxInfo();
   } catch (error) {
-    if (/(ECONNREFUSED|ENOTFOUND|SyntaxError)/.test(error.cause?.message)) {
+    if (isNodeNotReadyError(error)) {
       console.log(`Stacks node not ready, waiting...`);
     }
     await new Promise(resolve => setTimeout(resolve, 3000));
@@ -127,7 +143,7 @@ export function burnBlockToRewardCycle(burnBlock: number) {
 export const EPOCH_30_START_CYCLE = burnBlockToRewardCycle(EPOCH_30_START);
 
 export function isPreparePhase(burnBlock: number) {
-  return POX_REWARD_LENGTH - (burnBlock % POX_REWARD_LENGTH) < POX_PREPARE_LENGTH;
+  return POX_REWARD_LENGTH - (burnBlock % POX_REWARD_LENGTH) <= POX_PREPARE_LENGTH;
 }
 
 export function didCrossPreparePhase(lastBurnHeight: number, newBurnHeight: number) {

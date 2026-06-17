@@ -8,7 +8,7 @@ import {
   broadcastTransaction,
   StacksTransaction,
 } from '@stacks/transactions';
-import { logger } from './common';
+import { isNodeNotReadyError, logger } from './common';
 
 const broadcastInterval = parseInt(process.env.NAKAMOTO_BLOCK_INTERVAL ?? '2');
 const url = `http://${process.env.STACKS_CORE_RPC_HOST}:${process.env.STACKS_CORE_RPC_PORT}`;
@@ -93,7 +93,7 @@ async function waitForNakamoto() {
         break;
       }
     } catch (error) {
-      if (/(ECONNREFUSED|ENOTFOUND|SyntaxError)/.test(error.cause?.message)) {
+      if (isNodeNotReadyError(error)) {
         logger.info(
           `Stacks node not ready, waiting...`
         );
