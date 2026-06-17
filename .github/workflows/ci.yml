@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  dry-run:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y zstd stress
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install zstd jq stress
+
+      - name: Verify Makefile parses and dependency check passes
+        run: make -n up
+
+      - name: Smoke-test chainstate extraction (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          mkdir -p "$RUNNER_TEMP/hacknet-chainstate"
+          tar -xf docker/chainstate.tar.zstd -C "$RUNNER_TEMP/hacknet-chainstate"
+          test -d "$RUNNER_TEMP/hacknet-chainstate/bitcoin"
+
+  # Linux-only: macOS runners lack Docker. The Darwin Makefile branch and
+  # archive extraction are covered by dry-run.
+  live-run:
+    needs: dry-run
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Install dependencies
+        run: sudo apt-get update && sudo apt-get install -y zstd stress jq
+
+      - name: Boot network from chainstate archive
+        run: make up
+
+      - name: Wait for network to be live
+        run: |
+          for i in $(seq 1 30); do
+            if make test; then
+              echo "Network is live"
+              exit 0
+            fi
+            echo "Attempt $i/30 — not ready yet, sleeping 10s"
+            sleep 10
+          done
+          echo "Network did not become live within timeout"
+          exit 1
+
+      - name: Tear down
+        if: always()
+        run: make down-force
