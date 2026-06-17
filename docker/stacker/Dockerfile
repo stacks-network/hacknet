@@ -6,6 +6,6 @@ WORKDIR /root
 COPY ./stacking/package.json /root/
 RUN npm i
 
-COPY ./stacking/stacking.ts ./stacking/common.ts ./stacking/tx-broadcaster.ts ./stacking/pox5-setup.ts /root/
+COPY ./stacking/stacking.ts ./stacking/common.ts ./stacking/tx-broadcaster.ts ./stacking/pox5-setup.ts ./stacking/bitcoin-staking.ts /root/
 
 CMD ["npx", "tsx", "/root/stacking.ts"]
