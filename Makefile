@@ -106,7 +106,7 @@ up: check-not-running | build $(CHAINSTATE_DIR)
 genesis: check-not-running | build $(CHAINSTATE_DIR)
 	@echo "Starting $(PROJECT) network from genesis"
 	@echo "  OS: $(OS)"
-	@[ -d "$(CHAINSTATE_DIR)" ] && { echo "    Removing existing genesis chainstate dir: $(CHAINSTATE_DIR)"; sudo rm -rf $(CHAINSTATE_DIR); }
+	@[ -d "$(CHAINSTATE_DIR)" ] && { echo "    Removing existing genesis chainstate dir: $(CHAINSTATE_DIR)"; rm -rf "$(CHAINSTATE_DIR)"; }
 	@echo "  Chainstate Dir: $(CHAINSTATE_DIR)"
 	mkdir -p "$(CHAINSTATE_DIR)"
 	echo "$(CHAINSTATE_DIR)" > .current-chainstate-dir
