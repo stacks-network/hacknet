@@ -1,30 +1,17 @@
 import type { PoxInfo } from '@stacks/stacking';
 import {
   AnchorMode,
-  ClarityType,
-  type ClarityValue,
   PostConditionMode,
-  type StacksTransaction,
   TransactionVersion,
-  broadcastTransaction,
-  bufferCV,
   callReadOnlyFunction,
-  contractPrincipalCV,
-  cvToString,
   getAddressFromPrivateKey,
   getNonce,
-  listCV,
   makeContractCall,
-  noneCV,
   principalCV,
-  responseErrorCV,
-  tupleCV,
   uintCV,
 } from '@stacks/transactions';
 import {
   type Account,
-  POX_REWARD_LENGTH,
-  contractsApi,
   getAccounts,
   isPreparePhase,
   logger,
@@ -32,10 +19,27 @@ import {
   parseEnvInt,
   waitForSetup,
 } from './common';
-
-const POX5_BOOT_ADDRESS = 'ST000000000000000000002AMW42H';
-const POX5_CONTRACT_NAME = 'pox-5';
-const BOND_GAP_CYCLES = 2n;
+import {
+  type BondSelection,
+  bondAllowance,
+  bondExists,
+  bondSetupOpenHeight,
+  bondStartBurnHeight,
+  hasBondMembership,
+  registerForBond as registerForPox5Bond,
+  setupBond as setupPox5Bond,
+  waitForPox5,
+  waitForSignerManagers,
+} from './pox5';
+import { signerManagerForAccount } from './pox5-signer-manager';
+import {
+  broadcastOrThrow,
+  contractExists,
+  okUintValue,
+  parseEnvBigInt,
+  sleep,
+  splitContractId,
+} from './helpers';
 
 const bondAdminAddress = process.env.POX_5_BOND_ADMIN!;
 const bondAdminPrivateKey =
@@ -56,34 +60,7 @@ const pollIntervalMs = (parseEnvInt('BITCOIN_STAKING_POLL_INTERVAL', false) ?? 3
 const mintMultiplier = BigInt(parseEnvInt('BITCOIN_STAKING_MINT_MULTIPLIER', false) ?? 2);
 
 const sbtcContract = splitContractId(sbtcContractId);
-
-type SignerManager = {
-  contractAddress: string;
-  contractName: string;
-};
-
-type BondSelection = {
-  index: bigint;
-  startBurnHeight: bigint;
-  exists: boolean;
-};
-
-function splitContractId(contractId: string) {
-  const [contractAddress, contractName, ...extra] = contractId.split('.');
-  if (!contractAddress || !contractName || extra.length > 0) {
-    throw new Error(`Invalid contract id: ${contractId}`);
-  }
-  return { contractAddress, contractName };
-}
-
-function parseEnvBigInt(envKey: string) {
-  const value = process.env[envKey];
-  if (typeof value === 'undefined') return undefined;
-  if (!/^[0-9]+$/.test(value)) {
-    throw new Error(`${envKey} must be an unsigned integer, got ${value}`);
-  }
-  return BigInt(value);
-}
+const poll = () => sleep(pollIntervalMs);
 
 function validateConfig() {
   if (!bondAdminPrivateKey) {
@@ -112,116 +89,6 @@ function validateConfig() {
   }
 }
 
-function signerManagerName(account: Account) {
-  return `pox5-signer-${account.index}`;
-}
-
-function sleep(ms = pollIntervalMs) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function uintValue(value: ClarityValue, label: string) {
-  if (value.type !== ClarityType.UInt) {
-    throw new Error(`${label} expected uint, got ${cvToString(value)}`);
-  }
-  return value.value;
-}
-
-function okUintValue(value: ClarityValue, label: string) {
-  if (value.type !== ClarityType.ResponseOk) {
-    throw new Error(`${label} expected ok uint, got ${cvToString(value)}`);
-  }
-  return uintValue(value.value, label);
-}
-
-function optionalUintValue(value: ClarityValue, label: string) {
-  if (value.type === ClarityType.OptionalNone) return undefined;
-  if (value.type !== ClarityType.OptionalSome) {
-    throw new Error(`${label} expected optional uint, got ${cvToString(value)}`);
-  }
-  return uintValue(value.value, label);
-}
-
-function isSome(value: ClarityValue) {
-  return value.type === ClarityType.OptionalSome;
-}
-
-async function pox5ReadOnly(
-  functionName: string,
-  functionArgs: ClarityValue[],
-  senderAddress = bondAdminAddress
-) {
-  return callReadOnlyFunction({
-    contractAddress: POX5_BOOT_ADDRESS,
-    contractName: POX5_CONTRACT_NAME,
-    functionName,
-    functionArgs,
-    senderAddress,
-    network,
-  });
-}
-
-async function waitForPox5(client: Account['client']) {
-  while (true) {
-    const poxInfo = await client.getPoxInfo();
-    const burnHeight = poxInfo.current_burnchain_block_height ?? 0;
-    if (poxInfo.contract_id?.endsWith('.pox-5')) {
-      logger.info(
-        { burnHeight, poxContract: poxInfo.contract_id },
-        'PoX-5 is active; starting Bitcoin Staking setup'
-      );
-      return poxInfo;
-    }
-    logger.info(
-      { burnHeight, poxContract: poxInfo.contract_id },
-      'Waiting for active PoX-5 contract'
-    );
-    await sleep();
-  }
-}
-
-async function signerRegistered(signerManager: SignerManager) {
-  const result = await pox5ReadOnly('get-signer-info', [
-    contractPrincipalCV(signerManager.contractAddress, signerManager.contractName),
-  ]);
-  return isSome(result);
-}
-
-async function waitForSignerManagers(signerManagers: SignerManager[]) {
-  while (true) {
-    const missing: string[] = [];
-    for (const signerManager of signerManagers) {
-      if (!(await signerRegistered(signerManager))) {
-        missing.push(`${signerManager.contractAddress}.${signerManager.contractName}`);
-      }
-    }
-    if (missing.length === 0) {
-      logger.info({ signers: signerManagers.length }, 'PoX-5 signer managers are registered');
-      return;
-    }
-    logger.info({ missing }, 'Waiting for PoX-5 signer managers to register');
-    await sleep();
-  }
-}
-
-async function bondStartBurnHeight(bondIndex: bigint) {
-  return uintValue(
-    await pox5ReadOnly('bond-period-to-burn-height', [uintCV(bondIndex)]),
-    'bond-period-to-burn-height'
-  );
-}
-
-async function bondExists(bondIndex: bigint) {
-  return isSome(await pox5ReadOnly('get-protocol-bond', [uintCV(bondIndex)]));
-}
-
-async function bondAllowance(bondIndex: bigint, staker: string) {
-  return optionalUintValue(
-    await pox5ReadOnly('get-bond-allowance', [uintCV(bondIndex), principalCV(staker)], staker),
-    'get-bond-allowance'
-  );
-}
-
 async function missingAllowances(bondIndex: bigint, participants: Account[]) {
   const missing: string[] = [];
   for (const participant of participants) {
@@ -235,7 +102,6 @@ async function missingAllowances(bondIndex: bigint, participants: Account[]) {
 
 async function selectBondIndex(client: Account['client'], participants: Account[]) {
   let baseIndex = configuredBondIndex;
-  const setupWindow = BOND_GAP_CYCLES * BigInt(POX_REWARD_LENGTH);
 
   while (true) {
     const poxInfo = await client.getPoxInfo();
@@ -243,14 +109,14 @@ async function selectBondIndex(client: Account['client'], participants: Account[
 
     for (let offset = 0n; offset < 16n; offset++) {
       const bondIndex = baseIndex + offset;
-      const startBurnHeight = await bondStartBurnHeight(bondIndex);
+      const startBurnHeight = await bondStartBurnHeight(bondIndex, bondAdminAddress);
 
       if (currentBurnHeight >= startBurnHeight) {
         baseIndex = bondIndex + 1n;
         continue;
       }
 
-      if (await bondExists(bondIndex)) {
+      if (await bondExists(bondIndex, bondAdminAddress)) {
         const missing = await missingAllowances(bondIndex, participants);
         if (missing.length === 0) {
           return { index: bondIndex, startBurnHeight, exists: true };
@@ -262,7 +128,7 @@ async function selectBondIndex(client: Account['client'], participants: Account[
         continue;
       }
 
-      const setupOpenHeight = startBurnHeight > setupWindow ? startBurnHeight - setupWindow : 0n;
+      const setupOpenHeight = bondSetupOpenHeight(startBurnHeight);
       if (currentBurnHeight >= setupOpenHeight) {
         return { index: bondIndex, startBurnHeight, exists: false };
       }
@@ -279,17 +145,8 @@ async function selectBondIndex(client: Account['client'], participants: Account[
       break;
     }
 
-    await sleep();
+    await poll();
   }
-}
-
-async function broadcast(tx: StacksTransaction, label: string) {
-  const result = await broadcastTransaction(tx, network);
-  if (result.error) {
-    throw new Error(`Error broadcasting ${label}: ${JSON.stringify(result)}`);
-  }
-  logger.info({ txid: result.txid, label }, 'Broadcast Bitcoin Staking transaction');
-  return result.txid;
 }
 
 async function setupBond(selection: BondSelection, participants: Account[]) {
@@ -298,49 +155,32 @@ async function setupBond(selection: BondSelection, participants: Account[]) {
     return;
   }
 
-  const nonce = await getNonce(bondAdminAddress, network);
-  const allowlist = listCV(
-    participants.map(participant =>
-      tupleCV({
-        staker: principalCV(participant.stxAddress),
-        'max-sats': uintCV(amountSats),
-      })
-    )
-  );
-  const tx = await makeContractCall({
-    contractAddress: POX5_BOOT_ADDRESS,
-    contractName: POX5_CONTRACT_NAME,
-    functionName: 'setup-bond',
-    functionArgs: [
-      uintCV(selection.index),
-      uintCV(targetRate),
-      uintCV(stxValueRatio),
-      uintCV(minUstxRatio),
-      bufferCV(new Uint8Array(683)),
-      allowlist,
-    ],
-    senderKey: bondAdminPrivateKey!,
-    nonce,
+  await setupPox5Bond({
+    bondAdminAddress,
+    bondAdminPrivateKey: bondAdminPrivateKey!,
+    bondIndex: selection.index,
+    targetRate,
+    stxValueRatio,
+    minUstxRatio,
+    allowlist: participants.map(participant => ({
+      staker: participant.stxAddress,
+      maxSats: amountSats,
+    })),
     fee: setupFee,
-    anchorMode: AnchorMode.Any,
-    network,
-    postConditionMode: PostConditionMode.Allow,
   });
-
-  await broadcast(tx, `pox-5 setup-bond ${selection.index}`);
   await waitForBond(selection.index, participants);
 }
 
 async function waitForBond(bondIndex: bigint, participants: Account[]) {
   for (let attempt = 1; attempt <= 120; attempt++) {
     if (
-      (await bondExists(bondIndex)) &&
+      (await bondExists(bondIndex, bondAdminAddress)) &&
       (await missingAllowances(bondIndex, participants)).length === 0
     ) {
       logger.info({ bondIndex: bondIndex.toString() }, 'PoX-5 bond configured');
       return;
     }
-    await sleep();
+    await poll();
   }
   throw new Error(`Timed out waiting for PoX-5 bond ${bondIndex} to be configured`);
 }
@@ -385,7 +225,10 @@ async function mintSbtcIfNeeded(participant: Account) {
     postConditionMode: PostConditionMode.Allow,
   });
 
-  await broadcast(tx, `sbtc-token mint ${participant.stxAddress}`);
+  await broadcastOrThrow(tx, `sbtc-token mint ${participant.stxAddress}`, {
+    log: participant.logger,
+    message: 'Broadcast Bitcoin Staking transaction',
+  });
   for (let attempt = 1; attempt <= 120; attempt++) {
     const updated = await sbtcBalance(participant);
     if (updated >= amountSats) {
@@ -395,19 +238,9 @@ async function mintSbtcIfNeeded(participant: Account) {
       );
       return;
     }
-    await sleep();
+    await poll();
   }
   throw new Error(`Timed out waiting for mock sBTC mint to ${participant.stxAddress}`);
-}
-
-async function hasBondMembership(participant: Account) {
-  return isSome(
-    await pox5ReadOnly(
-      'get-bond-membership',
-      [principalCV(participant.stxAddress)],
-      participant.stxAddress
-    )
-  );
 }
 
 async function waitForRegistrationWindow(client: Account['client'], selection: BondSelection) {
@@ -428,7 +261,7 @@ async function waitForRegistrationWindow(client: Account['client'], selection: B
       },
       'Waiting for non-prepare phase before register-for-bond'
     );
-    await sleep();
+    await poll();
   }
 }
 
@@ -436,37 +269,25 @@ async function registerForBond(
   client: Account['client'],
   selection: BondSelection,
   participant: Account,
-  signerManager: SignerManager
+  signerManager: ReturnType<typeof signerManagerForAccount>
 ) {
-  if (await hasBondMembership(participant)) {
+  if (await hasBondMembership(participant.stxAddress)) {
     participant.logger.info('Participant already has active PoX-5 bond membership');
     return;
   }
 
   await waitForRegistrationWindow(client, selection);
-  const nonce = await getNonce(participant.stxAddress, network);
-  const tx = await makeContractCall({
-    contractAddress: POX5_BOOT_ADDRESS,
-    contractName: POX5_CONTRACT_NAME,
-    functionName: 'register-for-bond',
-    functionArgs: [
-      uintCV(selection.index),
-      contractPrincipalCV(signerManager.contractAddress, signerManager.contractName),
-      uintCV(amountUstx),
-      responseErrorCV(uintCV(amountSats)),
-      noneCV(),
-    ],
-    senderKey: participant.privKey,
-    nonce,
+  await registerForPox5Bond({
+    participant,
+    signerManager,
+    bondIndex: selection.index,
+    amountUstx,
+    amountSats,
     fee: callFee,
-    anchorMode: AnchorMode.Any,
-    network,
-    postConditionMode: PostConditionMode.Allow,
   });
 
-  await broadcast(tx, `pox-5 register-for-bond ${participant.stxAddress}`);
   for (let attempt = 1; attempt <= 120; attempt++) {
-    if (await hasBondMembership(participant)) {
+    if (await hasBondMembership(participant.stxAddress)) {
       participant.logger.info(
         {
           bondIndex: selection.index.toString(),
@@ -478,24 +299,15 @@ async function registerForBond(
       );
       return;
     }
-    await sleep();
+    await poll();
   }
   throw new Error(`Timed out waiting for PoX-5 bond membership for ${participant.stxAddress}`);
-}
-
-async function contractExists(contractAddress: string, contractName: string) {
-  try {
-    const result = await contractsApi.getContractSource({ contractAddress, contractName });
-    return !!result.source;
-  } catch {
-    return false;
-  }
 }
 
 async function waitForSbtcContract() {
   while (!(await contractExists(sbtcContract.contractAddress, sbtcContract.contractName))) {
     logger.info({ contract: sbtcContractId }, 'Waiting for mock sBTC contract');
-    await sleep();
+    await poll();
   }
 }
 
@@ -504,10 +316,7 @@ async function run() {
 
   const participants = getAccounts(participantKeys, new Array(participantKeys.length).fill(1));
   const signerAccounts = getAccounts(signerKeys, new Array(signerKeys.length).fill(1));
-  const signerManagers = signerAccounts.map(account => ({
-    contractAddress: account.stxAddress,
-    contractName: signerManagerName(account),
-  }));
+  const signerManagers = signerAccounts.map(signerManagerForAccount);
 
   logger.info(
     {
@@ -524,9 +333,9 @@ async function run() {
   );
 
   await waitForSetup(participantKeys, new Array(participantKeys.length).fill(1));
-  const poxInfo = await waitForPox5(participants[0].client);
+  const poxInfo = await waitForPox5(participants[0].client, pollIntervalMs);
   await waitForSbtcContract();
-  await waitForSignerManagers(signerManagers);
+  await waitForSignerManagers(signerManagers, bondAdminAddress, pollIntervalMs);
 
   const selection = await selectBondIndex(participants[0].client, participants);
   logger.info(

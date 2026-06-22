@@ -1,20 +1,23 @@
-import { StacksTestnet } from '@stacks/network';
 import { StackingClient } from '@stacks/stacking';
 import {
   AnchorMode,
   PostConditionMode,
   TransactionVersion,
-  broadcastTransaction,
   getAddressFromPrivateKey,
   getNonce,
   makeContractDeploy,
-  StacksTransaction,
 } from '@stacks/transactions';
 import { getPublicKeyFromPrivate } from '@stacks/encryption';
-import { contractsApi, logger, parseEnvInt } from './common';
+import { clarityHexLiteral, loadContractSource, loadContractTemplate } from './contract-fixtures';
+import { logger, network, parseEnvInt } from './common';
+import {
+  broadcastOrThrow,
+  contractExists,
+  sleep,
+  splitContractId,
+  waitForContract as waitForContractDeployment,
+} from './helpers';
 
-const nodeUrl = `http://${process.env.STACKS_CORE_RPC_HOST}:${process.env.STACKS_CORE_RPC_PORT}`;
-const network = new StacksTestnet({ url: nodeUrl });
 const deployerPrivateKey = process.env.POX_5_DEPLOYER_PRIVATE_KEY!;
 const deployerAddress = process.env.POX_5_DEPLOYER_ADDRESS!;
 const sbtcContractId = process.env.POX_5_SBTC_CONTRACT!;
@@ -29,14 +32,6 @@ const deployerFromPrivateKey = getAddressFromPrivateKey(
   TransactionVersion.Testnet
 );
 const client = new StackingClient(deployerAddress, network);
-
-function splitContractId(contractId: string) {
-  const [contractAddress, contractName, ...extra] = contractId.split('.');
-  if (!contractAddress || !contractName || extra.length > 0) {
-    throw new Error(`Invalid contract id: ${contractId}`);
-  }
-  return { contractAddress, contractName };
-}
 
 const sbtcContract = splitContractId(sbtcContractId);
 const sbtcRegistryContract = splitContractId(sbtcRegistryContractId);
@@ -59,44 +54,6 @@ function validateConfig() {
   }
 }
 
-function sbtcRegistrySource(aggregatePubkey: string) {
-  return `
-(define-read-only (get-current-aggregate-pubkey)
-  0x${aggregatePubkey}
-)
-`.trim();
-}
-
-function sbtcTokenSource() {
-  return `
-(define-fungible-token sbtc-token)
-
-(define-public (transfer
-    (amount uint)
-    (sender principal)
-    (recipient principal)
-    (memo (optional (buff 34))))
-  (begin
-    (try! (ft-transfer? sbtc-token amount sender recipient))
-    (ok true)))
-
-(define-read-only (get-balance (who principal))
-  (ok (ft-get-balance sbtc-token who)))
-
-(define-public (mint (amount uint) (recipient principal))
-  (ft-mint? sbtc-token amount recipient))
-`.trim();
-}
-
-async function contractExists(contractAddress: string, contractName: string) {
-  try {
-    const result = await contractsApi.getContractSource({ contractAddress, contractName });
-    return !!result.source;
-  } catch {
-    return false;
-  }
-}
-
 async function waitForNode() {
   while (true) {
     try {
@@ -113,7 +70,7 @@ async function waitForNode() {
     } catch (error) {
       logger.info({ error }, 'Stacks node not ready for PoX-5 setup');
     }
-    await new Promise(resolve => setTimeout(resolve, 3000));
+    await sleep(3000);
   }
 }
 
@@ -125,15 +82,6 @@ async function assertBeforeEpoch4() {
       `PoX-5 prerequisite setup is too close to Epoch 4.0 (burn=${burnHeight}, epoch4=${epoch40Start}, safety=${setupSafetyBlocks})`
     );
   }
-}
-
-async function broadcast(tx: StacksTransaction, label: string) {
-  const result = await broadcastTransaction(tx, network);
-  if (result.error) {
-    throw new Error(`Error broadcasting ${label}: ${JSON.stringify(result)}`);
-  }
-  logger.info({ txid: result.txid, label }, 'Broadcast PoX-5 prerequisite deploy');
-  return result.txid;
 }
 
 async function deployContract(contractName: string, codeBody: string, nonce: bigint) {
@@ -148,19 +96,18 @@ async function deployContract(contractName: string, codeBody: string, nonce: big
     network,
     postConditionMode: PostConditionMode.Allow,
   });
-  await broadcast(tx, `${deployerAddress}.${contractName}`);
+  await broadcastOrThrow(tx, `${deployerAddress}.${contractName}`, {
+    message: 'Broadcast temporary PoX-5 prerequisite deploy',
+  });
 }
 
 async function waitForContract(contractName: string) {
-  for (let attempt = 1; attempt <= 90; attempt++) {
-    if (await contractExists(deployerAddress, contractName)) {
-      logger.info({ contract: `${deployerAddress}.${contractName}` }, 'Contract deployed');
-      return;
-    }
-    await assertBeforeEpoch4();
-    await new Promise(resolve => setTimeout(resolve, 2000));
-  }
-  throw new Error(`Timed out waiting for ${deployerAddress}.${contractName} to deploy`);
+  await waitForContractDeployment(deployerAddress, contractName, {
+    attempts: 90,
+    intervalMs: 2000,
+    onAttempt: assertBeforeEpoch4,
+  });
+  logger.info({ contract: `${deployerAddress}.${contractName}` }, 'Contract deployed');
 }
 
 async function deployIfMissing(contractName: string, codeBody: string, nonce: bigint) {
@@ -178,6 +125,9 @@ async function run() {
   await waitForNode();
 
   const aggregatePubkey = getPublicKeyFromPrivate(stackerKeys[0]);
+  const sbtcRegistrySource = loadContractTemplate('sbtc-registry.template.clar', {
+    AGGREGATE_PUBKEY: clarityHexLiteral(aggregatePubkey, 'sBTC aggregate pubkey'),
+  });
   let nonce = await getNonce(deployerAddress, network);
 
   logger.info(
@@ -188,23 +138,19 @@ async function run() {
       aggregatePubkey,
       epoch40Start,
     },
-    'Starting PoX-5 prerequisite setup'
+    'Starting temporary PoX-5 prerequisite setup'
   );
 
-  if (await deployIfMissing(sbtcContract.contractName, sbtcTokenSource(), nonce)) {
-    nonce += 1n;
-  }
   if (
-    await deployIfMissing(
-      sbtcRegistryContract.contractName,
-      sbtcRegistrySource(aggregatePubkey),
-      nonce
-    )
+    await deployIfMissing(sbtcContract.contractName, loadContractSource('sbtc-token.clar'), nonce)
   ) {
     nonce += 1n;
   }
+  if (await deployIfMissing(sbtcRegistryContract.contractName, sbtcRegistrySource, nonce)) {
+    nonce += 1n;
+  }
 
-  logger.info('PoX-5 prerequisite setup complete');
+  logger.info('Temporary PoX-5 prerequisite setup complete');
 }
 
 run().catch(error => {

@@ -451,6 +451,9 @@ services:
       PG_USER: "postgres"
       PG_PASSWORD: "postgres"
       PG_DATABASE: "postgres"
+      # Preserve hacknet's existing public-schema DB layout; API v9 defaults to
+      # stacks_blockchain_api.
+      PG_SCHEMA: "public"
       STACKS_CHAIN_ID: "0x80000000"
       STACKS_CORE_EVENT_PORT: 3700
       STACKS_CORE_EVENT_HOST: "0.0.0.0"
@@ -458,7 +461,6 @@ services:
       STACKS_BLOCKCHAIN_API_HOST: "0.0.0.0"
       STACKS_CORE_RPC_HOST: "stacks-miner-1"
       STACKS_CORE_RPC_PORT: 20443
-      PG_SCHEMA: "public"
       API_DOCS_URL: http://127.0.0.1:3999/doc
     ports:
       - '127.0.0.1:3700:3700'
@@ -473,6 +475,8 @@ services:
 
   # Stacker
   # ------------------
+  # Temporary bootstrap for PoX-5 dependency contracts until stacks-core ships
+  # them as boot contracts.
   pox5-setup:
     build: stacker
     container_name: pox5-setup

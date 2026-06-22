@@ -1,25 +1,4 @@
 import { PoxInfo, Pox4SignatureTopic } from '@stacks/stacking';
-import { hexToBytes } from '@stacks/common';
-import {
-  AnchorMode,
-  ClarityVersion,
-  PostConditionMode,
-  StacksTransaction,
-  broadcastTransaction,
-  bufferCV,
-  callReadOnlyFunction,
-  contractPrincipalCV,
-  cvToString,
-  getNonce,
-  makeContractCall,
-  makeContractDeploy,
-  noneCV,
-  principalCV,
-  signStructuredData,
-  stringAsciiCV,
-  tupleCV,
-  uintCV,
-} from '@stacks/transactions';
 import crypto from 'crypto';
 import {
   Account,
@@ -30,9 +9,14 @@ import {
   logger,
   burnBlockToRewardCycle,
   isPreparePhase,
-  network,
-  contractsApi,
 } from './common';
+import { ensurePox5Signer, signerManagerForAccount } from './pox5-signer-manager';
+import {
+  hasPox5Stake as hasPox5StakeOnChain,
+  stake as stakePox5Contract,
+  stakeUpdate as stakeUpdatePox5Contract,
+} from './pox5';
+import { sleep } from './helpers';
 
 const randInt = () => crypto.randomInt(0, 0xffffffffffff);
 const stackingInterval = parseEnvInt('STACKING_INTERVAL', true);
@@ -44,9 +28,6 @@ const pox5CallFee = parseEnvInt('POX_5_CALL_FEE', false) ?? 10_000;
 
 const SLOT_MULTIPLIER = 1.1;
 const DEFAULT_NUM_SLOTS = 2;
-const POX5_BOOT_ADDRESS = 'ST000000000000000000002AMW42H';
-const POX5_CONTRACT_NAME = 'pox-5';
-const POX5_CLARITY_VERSION = 6 as ClarityVersion;
 
 let startTxFee = 1000;
 const getNextTxFee = () => startTxFee++;
@@ -262,7 +243,7 @@ async function run(stackingKeys: string[], stackingSlotDistribution: number[]) {
   );
 
   if (txSubmitted) {
-    await new Promise(resolve => setTimeout(resolve, postTxWait * 1000));
+    await sleep(postTxWait * 1000);
   }
 }
 
@@ -389,146 +370,9 @@ async function stackExtend(
   );
 }
 
-function pox5SignerManagerName(account: Account) {
-  return `pox5-signer-${account.index}`;
-}
-
-function pox5SignerManagerSource() {
-  return `
-(impl-trait 'ST000000000000000000002AMW42H.pox-5.signer-manager-trait)
-(use-trait signer-manager-trait 'ST000000000000000000002AMW42H.pox-5.signer-manager-trait)
-
-(define-public (validate-stake!
-        (staker principal)
-        (first-index uint)
-        (num-indexes uint)
-        (amount-ustx uint)
-        (amount-sats uint)
-        (is-bond bool)
-        (signer-calldata (optional (buff 500)))
-    )
-    (ok true)
-)
-
-(define-public (register-self
-        (signer-manager <signer-manager-trait>)
-        (signer-key (buff 33))
-        (auth-id uint)
-        (signer-sig (buff 65))
-    )
-    (as-contract? ()
-        (try! (contract-call? 'ST000000000000000000002AMW42H.pox-5 grant-signer-key
-            signer-key current-contract auth-id signer-sig
-        ))
-        (try! (contract-call? 'ST000000000000000000002AMW42H.pox-5 register-signer
-            signer-manager signer-key
-        ))
-    )
-)
-`.trim();
-}
-
-async function contractExists(contractAddress: string, contractName: string) {
-  try {
-    const result = await contractsApi.getContractSource({ contractAddress, contractName });
-    return !!result.source;
-  } catch {
-    return false;
-  }
-}
-
-async function waitForContract(contractAddress: string, contractName: string) {
-  for (let attempt = 1; attempt <= 90; attempt++) {
-    if (await contractExists(contractAddress, contractName)) return;
-    await new Promise(resolve => setTimeout(resolve, 2000));
-  }
-  throw new Error(`Timed out waiting for ${contractAddress}.${contractName} to deploy`);
-}
-
-async function broadcastPox5Tx(tx: StacksTransaction, account: Account, label: string) {
-  const result = await broadcastTransaction(tx, network);
-  if (result.error) {
-    account.logger.error({ ...result, label }, `Error broadcasting ${label}`);
-    throw new Error(`Error broadcasting ${label}: ${JSON.stringify(result)}`);
-  }
-  account.logger.info({ txid: result.txid, label }, `Broadcast ${label}`);
-  return result.txid;
-}
-
-function makePox5GrantSignature(account: Account, signerManagerName: string, authId: number) {
-  const signerManagerPrincipal = `${account.stxAddress}.${signerManagerName}`;
-  const domain = tupleCV({
-    name: stringAsciiCV('pox-5-signer'),
-    version: stringAsciiCV('1.0.0'),
-    'chain-id': uintCV(chainId),
-  });
-  const message = tupleCV({
-    topic: stringAsciiCV('grant-authorization'),
-    'signer-manager': principalCV(signerManagerPrincipal),
-    'auth-id': uintCV(authId),
-  });
-  return signStructuredData({
-    message,
-    domain,
-    privateKey: account.signerPrivKey,
-  }).data;
-}
-
-async function ensurePox5Signer(account: Account) {
-  const contractName = pox5SignerManagerName(account);
-  let nonce = await getNonce(account.stxAddress, network);
-
-  if (!(await contractExists(account.stxAddress, contractName))) {
-    const deployTx = await makeContractDeploy({
-      contractName,
-      codeBody: pox5SignerManagerSource(),
-      senderKey: account.privKey,
-      nonce,
-      fee: pox5DeployFee,
-      anchorMode: AnchorMode.Any,
-      network,
-      clarityVersion: POX5_CLARITY_VERSION,
-      postConditionMode: PostConditionMode.Allow,
-    });
-    await broadcastPox5Tx(deployTx, account, `${contractName} deploy`);
-    await waitForContract(account.stxAddress, contractName);
-    nonce += 1n;
-  }
-
-  const authId = randInt();
-  const signerSignature = makePox5GrantSignature(account, contractName, authId);
-  const registerTx = await makeContractCall({
-    contractAddress: account.stxAddress,
-    contractName,
-    functionName: 'register-self',
-    functionArgs: [
-      contractPrincipalCV(account.stxAddress, contractName),
-      bufferCV(hexToBytes(account.signerPubKey)),
-      uintCV(authId),
-      bufferCV(hexToBytes(signerSignature)),
-    ],
-    senderKey: account.privKey,
-    nonce,
-    fee: pox5CallFee,
-    anchorMode: AnchorMode.Any,
-    network,
-    postConditionMode: PostConditionMode.Allow,
-  });
-  await broadcastPox5Tx(registerTx, account, `${contractName} register-self`);
-  return nonce + 1n;
-}
-
 async function hasPox5Stake(account: Account) {
   try {
-    const result = await callReadOnlyFunction({
-      contractAddress: POX5_BOOT_ADDRESS,
-      contractName: POX5_CONTRACT_NAME,
-      functionName: 'get-staker-info',
-      functionArgs: [principalCV(account.stxAddress)],
-      senderAddress: account.stxAddress,
-      network,
-    });
-    return cvToString(result) !== 'none';
+    return await hasPox5StakeOnChain(account.stxAddress);
   } catch (error) {
     account.logger.warn({ error }, 'Could not read PoX-5 staker info');
     return false;
@@ -548,30 +392,16 @@ async function stakePox5(poxInfo: PoxInfo, account: Account, totalBalance: bigin
     );
   }
 
-  const contractName = pox5SignerManagerName(account);
-  const nonce = await ensurePox5Signer(account);
-  const startBurnHeight = poxInfo.current_burnchain_block_height ?? 0;
-  const stakeTx = await makeContractCall({
-    contractAddress: POX5_BOOT_ADDRESS,
-    contractName: POX5_CONTRACT_NAME,
-    functionName: 'stake',
-    functionArgs: [
-      contractPrincipalCV(account.stxAddress, contractName),
-      uintCV(amountToStack),
-      uintCV(stackingCycles),
-      uintCV(startBurnHeight),
-      noneCV(),
-    ],
-    senderKey: account.privKey,
-    nonce,
-    fee: pox5CallFee,
-    anchorMode: AnchorMode.Any,
-    network,
-    postConditionMode: PostConditionMode.Allow,
+  const signerManager = signerManagerForAccount(account);
+  const nonce = await ensurePox5Signer(account, {
+    chainId,
+    deployFee: pox5DeployFee,
+    callFee: pox5CallFee,
   });
+  const startBurnHeight = poxInfo.current_burnchain_block_height ?? 0;
   account.logger.debug(
     {
-      signerManager: `${account.stxAddress}.${contractName}`,
+      signerManager: `${signerManager.contractAddress}.${signerManager.contractName}`,
       amountToStack: amountToStack.toString(),
       targetSlots: account.targetSlots,
       startBurnHeight,
@@ -579,31 +409,31 @@ async function stakePox5(poxInfo: PoxInfo, account: Account, totalBalance: bigin
     },
     'PoX-5 stake with args'
   );
-  await broadcastPox5Tx(stakeTx, account, 'pox-5 stake');
+  await stakePox5Contract({
+    account,
+    signerManager,
+    amountUstx: amountToStack,
+    cycles: stackingCycles,
+    startBurnHeight,
+    nonce,
+    fee: pox5CallFee,
+  });
 }
 
 async function stakeUpdatePox5(account: Account) {
-  const contractName = pox5SignerManagerName(account);
-  const nonce = await ensurePox5Signer(account);
-  const stakeUpdateTx = await makeContractCall({
-    contractAddress: POX5_BOOT_ADDRESS,
-    contractName: POX5_CONTRACT_NAME,
-    functionName: 'stake-update',
-    functionArgs: [
-      contractPrincipalCV(account.stxAddress, contractName),
-      contractPrincipalCV(account.stxAddress, contractName),
-      uintCV(stackingCycles),
-      uintCV(0),
-      noneCV(),
-    ],
-    senderKey: account.privKey,
+  const signerManager = signerManagerForAccount(account);
+  const nonce = await ensurePox5Signer(account, {
+    chainId,
+    deployFee: pox5DeployFee,
+    callFee: pox5CallFee,
+  });
+  await stakeUpdatePox5Contract({
+    account,
+    signerManager,
+    cycles: stackingCycles,
     nonce,
     fee: pox5CallFee,
-    anchorMode: AnchorMode.Any,
-    network,
-    postConditionMode: PostConditionMode.Allow,
   });
-  await broadcastPox5Tx(stakeUpdateTx, account, 'pox-5 stake-update');
 }
 
 async function loop() {
@@ -638,7 +468,7 @@ async function loop() {
     } catch (e) {
       console.error('Error running stacking:', e);
     }
-    await new Promise(resolve => setTimeout(resolve, stackingInterval * 1000));
+    await sleep(stackingInterval * 1000);
   }
 }
 loop();
