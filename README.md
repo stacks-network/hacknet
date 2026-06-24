@@ -55,7 +55,7 @@ The main PoX-5 controls are:
 
 - `STACKS_CORE_BASE_BRANCH`: branch, tag, or commit SHA used to build `stacks-node` and `stacks-signer`
 - `STACKS_40_HEIGHT`: Epoch 4.0 activation height, default `262`
-- `POX_5_DEPLOYER_PRIVATE_KEY`: funded key that deploys PoX-5 prerequisite sBTC contracts
+- `POX_5_DEPLOYER_PRIVATE_KEY`: funded key that temporarily deploys PoX-5 prerequisite sBTC contracts until those dependencies become boot contracts
 - `POX_5_SBTC_CONTRACT`: contract id used by `.pox-5` for the sBTC token
 - `POX_5_SBTC_REGISTRY_CONTRACT`: contract id used by signer-set computation for the sBTC aggregate key
 - `POX_5_BOND_ADMIN`: principal initialized as PoX-5 bond admin
@@ -259,7 +259,7 @@ make down-prom
 - **stacks-signer-3**: event observer for stacks-miner-3
 - **stacks-api**: API instance receiving events from stacks-miner-1
 - **postgres**: postgres DB used by stacks-api
-- **pox5-setup**: deploys `sbtc-registry` and `sbtc-token` before Epoch 4.0 so `.pox-5` can initialize
+- **pox5-setup**: temporary bootstrap that deploys `sbtc-registry` and `sbtc-token` before Epoch 4.0 so `.pox-5` can initialize until those dependencies become boot contracts
 - **stacker**: stack for `stacks-signer-1`, `stacks-signer-2` and `stacks-signer-3`
 - **bitcoin-staking**: optional helper that configures a PoX-5 protocol bond and registers funded participants with mock sBTC
 - **tx-broadcaster**: submits token transfer txs to ensure stacks block production during a sortition
