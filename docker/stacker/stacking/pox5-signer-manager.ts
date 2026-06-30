@@ -19,7 +19,7 @@ import { loadContractSource } from './contract-fixtures';
 import type { Account } from './common';
 import { network } from './common';
 import { broadcastOrThrow, contractExists, waitForContract } from './helpers';
-import type { SignerManager } from './pox5';
+import { type SignerManager, signerRegistered } from './pox5';
 
 const POX5_CLARITY_VERSION = 6 as ClarityVersion;
 const randInt = () => crypto.randomInt(0, 0xffffffffffff);
@@ -92,6 +92,10 @@ export async function ensurePox5Signer(
     });
     await waitForContract(signerManager.contractAddress, signerManager.contractName);
     nonce += 1n;
+  }
+
+  if (await signerRegistered(signerManager, account.stxAddress)) {
+    return nonce; // already registered; stake takes this nonce
   }
 
   const authId = randInt();
