@@ -13,6 +13,8 @@ ifeq ($(UNAME_S),Darwin)
     # Extract as the current user so everything lands user-owned.
     TAR_EXTRACT := tar -xf
     TAR_CREATE := tar --zstd -cf
+    # macOS Docker Desktop lands bind-mount files user-owned, so no sudo needed
+    RM_RF := rm -rf
 else
     OS := linux
     # Linux: use getent
@@ -24,6 +26,8 @@ else
     COMMANDS := sudo tar zstd getent jq stress
     TAR_EXTRACT := sudo tar --same-owner -xf
     TAR_CREATE := sudo tar --zstd -cf
+    # Rootful Docker writes the chainstate as root, so removal needs sudo
+    RM_RF := sudo rm -rf
 endif
 
 # Verify required dependencies exist
@@ -106,7 +110,7 @@ up: check-not-running | build $(CHAINSTATE_DIR)
 genesis: check-not-running | build $(CHAINSTATE_DIR)
 	@echo "Starting $(PROJECT) network from genesis"
 	@echo "  OS: $(OS)"
-	@[ -d "$(CHAINSTATE_DIR)" ] && { echo "    Removing existing genesis chainstate dir: $(CHAINSTATE_DIR)"; rm -rf "$(CHAINSTATE_DIR)"; }
+	@[ -d "$(CHAINSTATE_DIR)" ] && { echo "    Removing existing genesis chainstate dir: $(CHAINSTATE_DIR)"; $(RM_RF) "$(CHAINSTATE_DIR)"; }
 	@echo "  Chainstate Dir: $(CHAINSTATE_DIR)"
 	mkdir -p "$(CHAINSTATE_DIR)"
 	echo "$(CHAINSTATE_DIR)" > .current-chainstate-dir
