@@ -4,6 +4,7 @@
 - bind-mounts a local filesystem for data persistence
 - Uses a chainstate archive to boot the network quickly
 - Configurable signing weight across the 3 signers
+- Configured for Epoch 4.0 / PoX-5 using the PoX waterfall integration branch
 - Designed to run on Linux (tested on Debian-based) or MacOS
 
 ## Quickstart
@@ -46,6 +47,37 @@ make down
 ```
 
 ## Full list of options
+
+### Epoch 4.0 / PoX-5
+
+Hacknet defaults to the Stacks Core PoX-5 integration SHA configured in `docker/docker-compose.yml`.
+The main PoX-5 controls are:
+
+- `STACKS_CORE_BASE_BRANCH`: branch, tag, or commit SHA used to build `stacks-node` and `stacks-signer`
+- `STACKS_40_HEIGHT`: Epoch 4.0 activation height, default `262`
+- `POX_5_DEPLOYER_PRIVATE_KEY`: funded key that temporarily deploys PoX-5 prerequisite sBTC contracts until those dependencies become boot contracts
+- `POX_5_SBTC_CONTRACT`: contract id used by `.pox-5` for the sBTC token
+- `POX_5_SBTC_REGISTRY_CONTRACT`: contract id used by signer-set computation for the sBTC aggregate key
+- `POX_5_BOND_ADMIN`: principal initialized as PoX-5 bond admin
+- `POX_5_BOND_ADMIN_PRIVATE_KEY`: key used by the opt-in Bitcoin Staking helper to call `setup-bond`
+
+Changing these values requires a fresh genesis run and a regenerated chainstate archive.
+
+### Bitcoin Staking
+
+Bitcoin Staking is available as an opt-in compose profile:
+
+```sh
+docker compose -f docker/docker-compose.yml --profile default --profile bitcoin-staking up bitcoin-staking
+```
+
+The helper waits for `.pox-5`, waits for signer-manager registration, sets up an available protocol bond, mints mock sBTC to the configured participants, and registers those participants through `register-for-bond` using the sBTC path.
+
+- `BITCOIN_STAKING_KEYS`: funded participant keys, defaulting to accounts that are not used by `tx-broadcaster`
+- `BITCOIN_STAKING_BOND_INDEX`: first bond index to try, default `0`
+- `BITCOIN_STAKING_AMOUNT_USTX`: STX to lock per participant, default `99000000000000`
+- `BITCOIN_STAKING_AMOUNT_SATS`: sBTC sats to bond per participant, default `1000000`
+- `BITCOIN_STAKING_TARGET_RATE`, `BITCOIN_STAKING_STX_VALUE_RATIO`, `BITCOIN_STAKING_MIN_USTX_RATIO`: PoX-5 bond parameters
 
 ### Logs
 
@@ -227,7 +259,9 @@ make down-prom
 - **stacks-signer-3**: event observer for stacks-miner-3
 - **stacks-api**: API instance receiving events from stacks-miner-1
 - **postgres**: postgres DB used by stacks-api
+- **pox5-setup**: temporary bootstrap that deploys `sbtc-registry` and `sbtc-token` before Epoch 4.0 so `.pox-5` can initialize until those dependencies become boot contracts
 - **stacker**: stack for `stacks-signer-1`, `stacks-signer-2` and `stacks-signer-3`
+- **bitcoin-staking**: optional helper that configures a PoX-5 protocol bond and registers funded participants with mock sBTC
 - **tx-broadcaster**: submits token transfer txs to ensure stacks block production during a sortition
 
 ## Bitcoin Miner
@@ -361,6 +395,34 @@ _Dedicated address for Bitcoin block production after initial setup (~200 blocks
 ‣ STX Address:  ST1MDWBDVDGAANEH9001HGXQA6XRNK7PX7A7X8M6R
 ‣ BTC Address:  mq5SjFHAPh93ZnFLc6Jev8yqn2iLg28Q5B
 ‣ WIF:          cMz2ZSsaVgWPFUkE44zHpJepB4NdwB9L938h53hQfFoot81AZFb3
+```
+
+## Bitcoin Staking Accounts
+
+Funded accounts used by the optional `bitcoin-staking` profile. These are separate from the transaction-generation accounts to avoid nonce contention with `tx-broadcaster`.
+
+### Bitcoin Staking 1
+
+```text
+‣ Private Key:  d9493653ea195060a599a356bd8381f70f52f007827dd25e7486d14e5197157801
+‣ Public Key:   020d6085b50919598386c7e96a252283420eecdf7cbaca4b968e90295e386c2028
+‣ STX Address:  ST2N30Q9PQPPPTBFYN4WN7KF3N2KRHZA9QFAABWP4
+```
+
+### Bitcoin Staking 2
+
+```text
+‣ Private Key:  c47a4264c2bd5b20ddb2ee3f731118555ecf41c63befd998d3bff89f204c0c9701
+‣ Public Key:   02303e0b336ce291e545558385521eaab845653ef4d9c7afa8fd445c15f39d6da2
+‣ STX Address:  ST3ZPZ54BV6BARTSGGM05PCJ5HA0XRAHYK3T8RSM8
+```
+
+### Bitcoin Staking 3
+
+```text
+‣ Private Key:  7b546d17e6d8aea6692f456c45489f218700eb3074a11f1a01f9c8c2cdf2a98901
+‣ Public Key:   0249cd888fc2e95faf7c82f83f79e20c5e8ef60829edd93ded57ef90542d794909
+‣ STX Address:  ST3AY3W1J4F67C5VSD8AZYD6N10P5M8SYT8WQWV40
 ```
 
 ## Testing Accounts

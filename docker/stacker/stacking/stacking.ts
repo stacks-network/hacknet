@@ -8,18 +8,30 @@ import {
   waitForSetup,
   logger,
   burnBlockToRewardCycle,
+  isPreparePhase,
 } from './common';
+import { ensurePox5Signer, signerManagerForAccount } from './pox5-signer-manager';
+import {
+  hasPox5Stake as hasPox5StakeOnChain,
+  stake as stakePox5Contract,
+  stakeUpdate as stakeUpdatePox5Contract,
+} from './pox5';
+import { sleep } from './helpers';
 
 const randInt = () => crypto.randomInt(0, 0xffffffffffff);
 const stackingInterval = parseEnvInt('STACKING_INTERVAL', true);
 const postTxWait = parseEnvInt('POST_TX_WAIT', true);
 const stackingCycles = parseEnvInt('STACKING_CYCLES', true);
+const chainId = parseEnvInt('STACKS_CHAIN_ID', false) ?? 0x80000000;
+const pox5DeployFee = parseEnvInt('POX_5_DEPLOY_FEE', false) ?? 3_000_000;
+const pox5CallFee = parseEnvInt('POX_5_CALL_FEE', false) ?? 10_000;
 
 const SLOT_MULTIPLIER = 1.1;
 const DEFAULT_NUM_SLOTS = 2;
 
 let startTxFee = 1000;
 const getNextTxFee = () => startTxFee++;
+let lastPoxContractId = '';
 
 type RewardCycleId = number;
 type AmountToStack = bigint;
@@ -76,18 +88,47 @@ function getFixedStackingAmount(
 async function run(stackingKeys: string[], stackingSlotDistribution: number[]) {
   const accounts = getAccounts(stackingKeys, stackingSlotDistribution);
   const poxInfo = await accounts[0].client.getPoxInfo();
-  if (!poxInfo.contract_id.endsWith('.pox-4')) {
+
+  const poxContractId = poxInfo.contract_id;
+  const previousPoxContractId = lastPoxContractId;
+  const poxTransitioned = previousPoxContractId !== '' && previousPoxContractId !== poxContractId;
+  lastPoxContractId = poxContractId;
+  const isPox4 = poxContractId.endsWith('.pox-4');
+  const isPox5 = poxContractId.endsWith('.pox-5');
+
+  if (!isPox4 && !isPox5) {
     logger.info(
       {
-        poxContract: poxInfo.contract_id,
+        poxContract: poxContractId,
       },
-      `Pox contract is not .pox-4, skipping stacking (contract=${poxInfo.contract_id})`
+      `Pox contract is not .pox-4 or .pox-5, skipping stacking (contract=${poxContractId})`
+    );
+    return;
+  }
+
+  if (poxTransitioned) {
+    logger.info(
+      {
+        from: previousPoxContractId,
+        to: poxContractId,
+      },
+      `Pox contract changed, forcing fresh stacking submissions`
+    );
+  }
+
+  if (isPox5 && isPreparePhase(poxInfo.current_burnchain_block_height ?? 0)) {
+    logger.info(
+      {
+        burnHeight: poxInfo.current_burnchain_block_height,
+      },
+      'PoX-5 staking updates are skipped during prepare phase'
     );
     return;
   }
 
   const runLog = logger.child({
     burnHeight: poxInfo.current_burnchain_block_height,
+    poxContract: poxContractId,
   });
 
   const accountInfos = await Promise.all(
@@ -112,6 +153,52 @@ async function run(stackingKeys: string[], stackingSlotDistribution: number[]) {
 
   await Promise.all(
     accountInfos.map(async account => {
+      if (isPox5) {
+        const hasActivePox5Stake = !poxTransitioned && (await hasPox5Stake(account));
+        if (!hasActivePox5Stake) {
+          runLog.info(
+            {
+              burnHeight: poxInfo.current_burnchain_block_height,
+              unlockHeight: account.unlockHeight,
+              account: account.index,
+            },
+            `Account ${account.index} needs fresh PoX-5 stake`
+          );
+          await stakePox5(poxInfo, account, account.balance + account.lockedAmount);
+          txSubmitted = true;
+          return;
+        }
+
+        const unlockHeightCycle = burnBlockToRewardCycle(account.unlockHeight);
+        const nowCycle = burnBlockToRewardCycle(poxInfo.current_burnchain_block_height ?? 0);
+        if (unlockHeightCycle === nowCycle + 1) {
+          runLog.info(
+            {
+              burnHeight: poxInfo.current_burnchain_block_height,
+              unlockHeight: account.unlockHeight,
+              account: account.index,
+              nowCycle,
+              unlockCycle: unlockHeightCycle,
+            },
+            `Account ${account.index} needs PoX-5 stake-update`
+          );
+          await stakeUpdatePox5(account);
+          txSubmitted = true;
+          return;
+        }
+        runLog.info(
+          {
+            burnHeight: poxInfo.current_burnchain_block_height,
+            unlockHeight: account.unlockHeight,
+            account: account.index,
+            nowCycle,
+            unlockCycle: unlockHeightCycle,
+          },
+          `Account ${account.index} has active PoX-5 stake, skipping stacking`
+        );
+        return;
+      }
+
       if (account.lockedAmount === 0n) {
         runLog.info(
           {
@@ -156,7 +243,7 @@ async function run(stackingKeys: string[], stackingSlotDistribution: number[]) {
   );
 
   if (txSubmitted) {
-    await new Promise(resolve => setTimeout(resolve, postTxWait * 1000));
+    await sleep(postTxWait * 1000);
   }
 }
 
@@ -283,6 +370,72 @@ async function stackExtend(
   );
 }
 
+async function hasPox5Stake(account: Account) {
+  try {
+    return await hasPox5StakeOnChain(account.stxAddress);
+  } catch (error) {
+    account.logger.warn({ error }, 'Could not read PoX-5 staker info');
+    return false;
+  }
+}
+
+async function stakePox5(poxInfo: PoxInfo, account: Account, totalBalance: bigint) {
+  const baseStackingAmount = getFixedStackingAmount(
+    poxInfo.next_cycle.id,
+    poxInfo.next_cycle.min_threshold_ustx
+  );
+  const amountToStack = baseStackingAmount * BigInt(account.targetSlots);
+
+  if (totalBalance < amountToStack) {
+    throw new Error(
+      `Insufficient balance to PoX-5 stake (required=${amountToStack}, total=${totalBalance})`
+    );
+  }
+
+  const signerManager = signerManagerForAccount(account);
+  const nonce = await ensurePox5Signer(account, {
+    chainId,
+    deployFee: pox5DeployFee,
+    callFee: pox5CallFee,
+  });
+  const startBurnHeight = poxInfo.current_burnchain_block_height ?? 0;
+  account.logger.debug(
+    {
+      signerManager: `${signerManager.contractAddress}.${signerManager.contractName}`,
+      amountToStack: amountToStack.toString(),
+      targetSlots: account.targetSlots,
+      startBurnHeight,
+      cycles: stackingCycles,
+    },
+    'PoX-5 stake with args'
+  );
+  await stakePox5Contract({
+    account,
+    signerManager,
+    amountUstx: amountToStack,
+    cycles: stackingCycles,
+    startBurnHeight,
+    nonce,
+    fee: pox5CallFee,
+  });
+}
+
+async function stakeUpdatePox5(account: Account) {
+  const signerManager = signerManagerForAccount(account);
+  const nonce = await ensurePox5Signer(account, {
+    chainId,
+    deployFee: pox5DeployFee,
+    callFee: pox5CallFee,
+  });
+  await stakeUpdatePox5Contract({
+    account,
+    signerManager,
+    cycles: stackingCycles,
+    nonce,
+    fee: pox5CallFee,
+  });
+}
+
 async function loop() {
   const stackingKeys = process.env.STACKING_KEYS?.split(',') || [];
 
@@ -315,7 +468,7 @@ async function loop() {
     } catch (e) {
       console.error('Error running stacking:', e);
     }
-    await new Promise(resolve => setTimeout(resolve, stackingInterval * 1000));
+    await sleep(stackingInterval * 1000);
   }
 }
 loop();

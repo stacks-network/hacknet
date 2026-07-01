@@ -4,6 +4,7 @@
 set -u
 
 DEBUG="${DEBUG:-0}"
+STACKS_40_HEIGHT="${STACKS_40_HEIGHT:-262}"
 FAILED=0
 TOTAL=0
 
@@ -106,6 +107,66 @@ if echo "$api_logs" | grep -qF "PgNotifier connected"; then
     check "stacks-api connected to postgres" 0
 else
     check "stacks-api connected to postgres" 1 "(no 'PgNotifier connected' in stacks-api logs)"
+fi
+
+# 12. PoX-5 setup helper did not fail
+pox5_setup_state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' pox5-setup 2>/dev/null || true)
+case "$pox5_setup_state" in
+    running*|exited\ 0)
+        check "pox5-setup not failed" 0 "$pox5_setup_state"
+        ;;
+    *)
+        check "pox5-setup not failed" 1 "${pox5_setup_state:-pox5-setup container not found}"
+        ;;
+esac
+
+bitcoin_staking_state=$(docker inspect -f '{{.State.Status}} {{.State.ExitCode}}' bitcoin-staking 2>/dev/null || true)
+if [ -n "$bitcoin_staking_state" ]; then
+    case "$bitcoin_staking_state" in
+        running*|exited\ 0)
+            check "bitcoin-staking not failed" 0 "$bitcoin_staking_state"
+            ;;
+        *)
+            check "bitcoin-staking not failed" 1 "$bitcoin_staking_state"
+            ;;
+    esac
+fi
+
+# 13+. PoX-5 checks, only required after Epoch 4.0 activation
+burn_height=$(echo "$info" | jq -r '.burn_block_height // 0' 2>/dev/null)
+burn_height="${burn_height:-0}"
+if [ "$burn_height" -ge "$STACKS_40_HEIGHT" ] 2>/dev/null; then
+    pox=$(curl -sf -m 5 "http://localhost:20443/v2/pox" 2>&1 || true)
+    pox_contract=$(echo "$pox" | jq -r '.contract_id // empty' 2>/dev/null)
+    if [[ "$pox_contract" == *.pox-5 ]]; then
+        check "active PoX contract is pox-5" 0 "$pox"
+    else
+        check "active PoX contract is pox-5" 1 "$pox"
+    fi
+
+    for contract in \
+        "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/sbtc-registry" \
+        "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039/sbtc-token" \
+        "ST24VB7FBXCBV6P0SRDSPSW0Y2J9XHDXNHW9Q8S7H/pox5-signer-0" \
+        "ST2XAK68AR2TKBQBFNYSK9KN2AY9CVA91A7CSK63Z/pox5-signer-1" \
+        "ST1J9R0VMA5GQTW65QVHW1KVSKD7MCGT27X37A551/pox5-signer-2"
+    do
+        contract_addr="${contract%/*}"
+        contract_name="${contract#*/}"
+        contract_resp=$(curl -sf -m 5 "http://localhost:20443/v2/contracts/source/${contract_addr}/${contract_name}" 2>&1 || true)
+        if echo "$contract_resp" | jq -e '.source | length > 0' >/dev/null 2>&1; then
+            check "contract deployed ${contract_addr}.${contract_name}" 0
+        else
+            check "contract deployed ${contract_addr}.${contract_name}" 1 "$contract_resp"
+        fi
+    done
+
+    waterfall_errors=$(docker logs stacks-miner-1 2>/dev/null | grep -E "Invalid waterfall block commit|Expected reward set to be present during waterfall" || true)
+    if [ -z "$waterfall_errors" ]; then
+        check "no waterfall commit errors" 0
+    else
+        check "no waterfall commit errors" 1 "$waterfall_errors"
+    fi
 fi
 
 # Summary

@@ -6,6 +6,9 @@ p2p_bind = "0.0.0.0:20444"
 prometheus_bind = "0.0.0.0:9153"
 working_dir = "/data/chainstate"
 bootstrap_node = "$BOOTSTRAP_NODE"
+pox_5_sbtc_contract = "$POX_5_SBTC_CONTRACT"
+pox_5_sbtc_registry_contract = "$POX_5_SBTC_REGISTRY_CONTRACT"
+pox_5_bond_admin = "$POX_5_BOND_ADMIN"
 wait_time_for_microblocks = 0
 mine_microblocks = false
 use_test_genesis_chainstate = true
@@ -88,6 +91,10 @@ epoch_name = "3.3"
 start_height = $STACKS_34_HEIGHT
 epoch_name = "3.4"
 
+[[burnchain.epochs]]
+start_height = $STACKS_40_HEIGHT
+epoch_name = "4.0"
+
 [[ustx_balance]]
 address = "ST2SBXRBJJTH7GV5J93HJ62W2NRRQ46XYBK92Y039" # Deployer Account
 amount = 10000000000000000
@@ -120,6 +127,18 @@ amount = 10000000000000000
 
 [[ustx_balance]]
 address = "ST1MDWBDVDGAANEH9001HGXQA6XRNK7PX7A7X8M6R" # Stacker 3
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST2N30Q9PQPPPTBFYN4WN7KF3N2KRHZA9QFAABWP4" # Bitcoin Staking 1
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST3ZPZ54BV6BARTSGGM05PCJ5HA0XRAHYK3T8RSM8" # Bitcoin Staking 2
+amount = 10000000000000000
+
+[[ustx_balance]]
+address = "ST3AY3W1J4F67C5VSD8AZYD6N10P5M8SYT8WQWV40" # Bitcoin Staking 3
 amount = 10000000000000000
 
 [[ustx_balance]]
