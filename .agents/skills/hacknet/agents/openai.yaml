@@ -1,0 +1,4 @@
+interface:
+  display_name: "Hacknet"
+  short_description: "Operate and checkpoint Stacks Hacknet"
+  default_prompt: "Use $hacknet to operate the checked-out Hacknet environment efficiently, reuse stable snapshots, and record reproducible observations."

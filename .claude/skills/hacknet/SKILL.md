@@ -1,0 +1,1 @@
+../../../.agents/skills/hacknet/SKILL.md
